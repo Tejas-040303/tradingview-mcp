@@ -8,11 +8,16 @@ import unittest
 
 from normalize import (
     blackout_status,
+    clean_last,
     filter_calendar,
+    filter_symbols,
+    infer_server_offset,
+    mid_price,
     normalize_calendar,
     resolve_timeframe,
     scaled,
     summarize_bars,
+    time_fields,
 )
 
 HOUR = 3600
@@ -201,6 +206,139 @@ class TestBlackoutStatus(unittest.TestCase):
         self.assertEqual(out['window'], {'before_min': 30, 'after_min': 45})
         self.assertEqual(out['currencies'], ['USD'])
         self.assertEqual(out['min_importance'], 'high')
+
+
+class TestInferServerOffset(unittest.TestCase):
+    """Guards against a stale tick being read as a real timezone offset."""
+
+    def test_infers_utc_plus_3_from_a_fresh_tick(self):
+        # XM's server clock runs 3h ahead; a tick 2s old reads as +10800.
+        self.assertEqual(infer_server_offset(NOW + 10800 - 2, NOW), 10800)
+
+    def test_infers_negative_offset(self):
+        self.assertEqual(infer_server_offset(NOW - 18000 + 5, NOW), -18000)
+
+    def test_rounds_to_the_nearest_half_hour(self):
+        self.assertEqual(infer_server_offset(NOW + 10800 + 400, NOW), 10800)
+
+    def test_handles_half_hour_timezones(self):
+        self.assertEqual(infer_server_offset(NOW + 19800 - 3, NOW), 19800)
+
+    def test_weekend_stale_tick_is_unknown_not_a_wrong_offset(self):
+        # Two days stale — must not be reported as a plausible-looking offset.
+        self.assertIsNone(infer_server_offset(NOW - 2 * 86400, NOW))
+
+    def test_missing_tick_is_unknown(self):
+        self.assertIsNone(infer_server_offset(None, NOW))
+
+    def test_accepts_the_extremes_of_the_real_timezone_range(self):
+        self.assertEqual(infer_server_offset(NOW + 50400, NOW), 50400)
+        self.assertIsNone(infer_server_offset(NOW + 50400 + 3600, NOW))
+
+
+class TestTimeFields(unittest.TestCase):
+    """The mislabelling bug: server timestamps must never be stamped as UTC."""
+
+    def test_server_time_is_not_labelled_utc(self):
+        out = time_fields(NOW, 10800)
+        self.assertFalse(out['time_server_iso'].endswith('Z'))
+
+    def test_utc_is_the_server_stamp_minus_the_offset(self):
+        out = time_fields(NOW, 10800)
+        self.assertEqual(out['time_utc'], NOW - 10800)
+        self.assertTrue(out['time_utc_iso'].endswith('Z'))
+
+    def test_unknown_offset_yields_no_utc_rather_than_a_guess(self):
+        out = time_fields(NOW, None)
+        self.assertEqual(out['time_server'], NOW)
+        self.assertIsNone(out['time_utc'])
+        self.assertIsNone(out['time_utc_iso'])
+
+    def test_zero_offset_still_produces_utc(self):
+        self.assertEqual(time_fields(NOW, 0)['time_utc'], NOW)
+
+    def test_missing_timestamp_yields_nothing(self):
+        self.assertEqual(time_fields(None, 10800), {})
+
+    def test_three_hour_gap_is_reflected_in_the_labels(self):
+        out = time_fields(NOW, 10800)
+        server_hour = out['time_server_iso'][11:13]
+        utc_hour = out['time_utc_iso'][11:13]
+        self.assertEqual((int(server_hour) - int(utc_hour)) % 24, 3)
+
+
+class TestCfdPriceFields(unittest.TestCase):
+    """CFDs report no last-trade price; 0.0 must not read as a real price."""
+
+    def test_zero_last_becomes_none(self):
+        self.assertIsNone(clean_last(0.0))
+
+    def test_real_last_is_preserved(self):
+        self.assertEqual(clean_last(4047.68), 4047.68)
+
+    def test_mid_is_the_average_of_bid_and_ask(self):
+        self.assertEqual(mid_price(4047.68, 4047.94, 2), 4047.81)
+
+    def test_mid_is_none_when_a_side_is_missing(self):
+        self.assertIsNone(mid_price(None, 4047.94, 2))
+        self.assertIsNone(mid_price(4047.68, 0, 2))
+
+
+class TestSummarizeBarsTimeLabels(unittest.TestCase):
+    def test_uses_expanded_fields_when_present(self):
+        bars = [{
+            'time_server': NOW, 'time_server_iso': '2026-07-30T10:15:26',
+            'time_utc': NOW - 10800, 'time_utc_iso': '2026-07-30T07:15:26Z',
+            'open': 1.0, 'high': 2.0, 'low': 0.5, 'close': 1.5, 'tick_volume': 1,
+        }]
+        out = summarize_bars(bars)
+        self.assertEqual(out['from_server'], '2026-07-30T10:15:26')
+        self.assertEqual(out['from_utc'], '2026-07-30T07:15:26Z')
+
+    def test_bare_time_is_treated_as_server_time_with_no_utc_claim(self):
+        bars = [{'time': NOW, 'open': 1.0, 'high': 2.0, 'low': 0.5,
+                 'close': 1.5, 'tick_volume': 1}]
+        out = summarize_bars(bars)
+        self.assertFalse(out['from_server'].endswith('Z'))
+        self.assertIsNone(out['from_utc'])
+
+
+class TestFilterSymbols(unittest.TestCase):
+    def setUp(self):
+        # Shape mirrors what XM actually returns.
+        self.symbols = [
+            {'name': 'GOLD.i#', 'description': 'GOLD'},
+            {'name': 'GOLD24-7.i#', 'description': 'GOLD 24/7'},
+            {'name': 'XAUEUR.i#', 'description': 'Gold vs Euro'},
+            {'name': 'BarrickGold', 'description': 'Barrick Gold Corp'},
+            {'name': 'EURUSD', 'description': 'Euro vs US Dollar'},
+        ]
+
+    def test_matches_on_name(self):
+        names = [s['name'] for s in filter_symbols(self.symbols, 'gold')]
+        self.assertIn('GOLD.i#', names)
+        self.assertNotIn('EURUSD', names)
+
+    def test_matches_on_description(self):
+        names = [s['name'] for s in filter_symbols(self.symbols, 'euro')]
+        self.assertIn('EURUSD', names)
+        self.assertIn('XAUEUR.i#', names)
+
+    def test_is_case_insensitive(self):
+        self.assertEqual(len(filter_symbols(self.symbols, 'GoLd')),
+                         len(filter_symbols(self.symbols, 'gold')))
+
+    def test_empty_search_returns_everything_sorted(self):
+        out = filter_symbols(self.symbols)
+        self.assertEqual(len(out), 5)
+        self.assertEqual([s['name'] for s in out],
+                         sorted(s['name'] for s in self.symbols))
+
+    def test_limit_is_applied(self):
+        self.assertEqual(len(filter_symbols(self.symbols, limit=2)), 2)
+
+    def test_tolerates_empty_input(self):
+        self.assertEqual(filter_symbols(None, 'gold'), [])
 
 
 if __name__ == '__main__':

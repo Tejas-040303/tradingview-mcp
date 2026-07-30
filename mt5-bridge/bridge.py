@@ -59,6 +59,12 @@ def route(path, params):
     if path == '/orders':
         return mt5_client.orders(symbol=_one(params, 'symbol'))
 
+    if path == '/symbols':
+        return mt5_client.symbols(
+            search=_one(params, 'search'),
+            limit=int(_one(params, 'limit', 200)),
+        )
+
     if path == '/quote':
         symbol = _one(params, 'symbol')
         if not symbol:

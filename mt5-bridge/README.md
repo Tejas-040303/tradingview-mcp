@@ -73,10 +73,19 @@ that `/health` can tell you why.
 ### 4. Verify
 
 ```bat
-curl http://127.0.0.1:8765/health
-curl "http://127.0.0.1:8765/quote?symbol=XAUUSD"
-curl "http://127.0.0.1:8765/blackout?currencies=USD"
+curl.exe http://127.0.0.1:8765/health
+curl.exe "http://127.0.0.1:8765/symbols?search=gold"
+curl.exe "http://127.0.0.1:8765/quote?symbol=GOLD.i%23"
+curl.exe "http://127.0.0.1:8765/blackout?currencies=USD"
 ```
+
+Find your instrument with `/symbols` before querying it — broker names vary and
+`XAUUSD` does not exist everywhere.
+
+In PowerShell, call `curl.exe` explicitly (bare `curl` is an alias for
+`Invoke-WebRequest` in PowerShell 5.1) and always quote URLs containing `&`,
+which PowerShell treats as an operator. `Invoke-RestMethod <url> | ConvertTo-Json
+-Depth 6` works well too.
 
 ## Routes
 
@@ -84,9 +93,10 @@ curl "http://127.0.0.1:8765/blackout?currencies=USD"
 |---|---|
 | `/health` | Terminal connected, account identity, server clock offset |
 | `/account` | Balance, equity, margin, leverage, currency |
+| `/symbols` | `?search=gold&limit=200` — find what your broker calls an instrument |
 | `/positions` | Open positions (`?symbol=` to narrow) |
 | `/orders` | Pending orders |
-| `/quote` | `?symbol=XAUUSD` — bid, ask, spread, digits |
+| `/quote` | `?symbol=GOLD.i%23` — bid, ask, mid, spread, digits |
 | `/bars` | `?symbol=&timeframe=5&count=100&summary=1` |
 | `/deals` | `?from=&to=&symbol=` — closed fills, for journaling |
 | `/calendar` | `?currencies=USD&min_importance=high&from=&to=` |
@@ -96,6 +106,20 @@ Timeframes use the same strings as tradingview-mcp: `1`, `5`, `15`, `60`, `240`,
 `D`, `W`, `M` (plus aliases like `15m`, `4h`, `daily`).
 
 Anything other than `GET` returns **405**. Bars are capped at 5000.
+
+### Symbol names need URL encoding
+
+Broker symbols routinely contain characters with meaning in a URL. XM names spot
+gold `GOLD.i#`, and `#` starts a URL fragment — passed raw, the bridge only ever
+receives `GOLD.i` and fails. Encode it:
+
+```
+/quote?symbol=GOLD.i%23        correct
+/quote?symbol=GOLD.i#          truncated at the #
+```
+
+Use `/symbols?search=gold` to discover the exact name first. Do not assume
+`XAUUSD` exists — on XM it does not.
 
 ### `/blackout` is the one that matters
 
@@ -116,16 +140,61 @@ in the loop:
 landed. An event blacks out from `before_min` ahead of it to `after_min` after.
 Defaults to high-importance events only; pass `min_importance=moderate` to widen.
 
-## Timestamp caveat — read this before joining data
+## Timestamps — read this before joining data
 
-**Bar timestamps are broker-server time. Calendar times are UTC.** Most brokers
-run a server clock offset from UTC (often UTC+2/+3), so joining bars against
-calendar events without correcting will silently misalign them by hours — which
-would quietly wreck any news-impact study.
+**MetaTrader 5 reports tick and bar times against the broker's clock, not UTC.**
+They look like Unix timestamps but are shifted by the server offset — 3 hours on
+XM. Formatting one as UTC and appending `Z` produces a confident lie, so the
+bridge never does that. Every timestamp comes back explicitly labelled:
 
-`/health` reports `server_utc_offset_sec` for exactly this reason. Apply it
-before correlating the two, and sanity-check one known release against the bar
-that should contain it.
+```json
+{
+  "time_server": 1785406526,
+  "time_server_iso": "2026-07-30T10:15:26",
+  "time_utc": 1785395726,
+  "time_utc_iso": "2026-07-30T07:15:26Z"
+}
+```
+
+No `Z` on the server value, because it is not UTC. **Join on `time_utc`** —
+calendar events are UTC, and mixing the two misaligns every correlation by the
+offset while looking perfectly reasonable.
+
+### When the offset is unknown
+
+`time_utc` and `time_utc_iso` come back `null`, and `/health` reports
+`server_utc_offset_source: "unknown"`.
+
+The offset is measured by comparing the newest tick across several majors
+against real UTC, which only works while ticks are arriving. Over a weekend the
+newest tick can be days old and would imply an offset like `-169200` — so
+anything outside the real timezone range (UTC-12..UTC+14) is reported as unknown
+rather than guessed. A missing value is recoverable; a wrong one silently
+corrupts everything downstream.
+
+To pin it explicitly — recommended if you collect data across weekends:
+
+```bat
+set MT5_SERVER_UTC_OFFSET_SEC=10800    :: UTC+3, e.g. XM
+```
+
+`/health` then reports `server_utc_offset_source: "env"` and skips probing.
+
+`/deals` shifts its window too: you pass UTC bounds, and it converts them to
+server time before querying, because `history_deals_get` reads server time.
+
+## CFD price fields
+
+CFDs have no central exchange, so brokers leave last-trade price and traded
+volume empty — MetaTrader 5 returns `0.0`, not null. The bridge normalises both
+to `null` and adds `mid`, so a zero is never mistaken for a price:
+
+```json
+{"bid": 4047.68, "ask": 4047.94, "mid": 4047.81, "last": null, "volume": null}
+```
+
+Anything computing levels should use `mid`. Log `spread` alongside signals — it
+widens sharply around news.
 
 ## Tests
 
@@ -133,9 +202,11 @@ that should contain it.
 python -m unittest discover -s mt5-bridge
 ```
 
-31 tests over `normalize.py` — timeframe resolution, bar summaries, MQL5 value
-decoding, calendar filtering, and the blackout window logic including boundary
-cases and asymmetric windows. These need no terminal and run in CI on Linux.
+56 tests over `normalize.py` — timeframe resolution, bar summaries, MQL5 value
+decoding, calendar filtering, blackout windows including boundary cases and
+asymmetric windows, server-offset inference including the stale-weekend-tick
+guard, timestamp labelling, CFD price normalisation, and symbol search. These
+need no terminal and run in CI on Linux.
 
 `mt5_client.py` needs Windows and a live terminal, so it is **not** covered.
 Verify it manually with the `curl` calls above.

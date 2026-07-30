@@ -12,13 +12,30 @@ Requires the MetaTrader5 package, which is Windows-only:
 """
 import json
 import os
+import time
 from datetime import datetime, timezone
 
-from normalize import resolve_timeframe, normalize_calendar
+from normalize import (
+    clean_last,
+    filter_symbols,
+    infer_server_offset,
+    mid_price,
+    normalize_calendar,
+    resolve_timeframe,
+    time_fields,
+)
 
 # Imported lazily so this module can be inspected (and normalize.py tested) on
 # platforms where the package cannot install.
 _mt5 = None
+
+# Liquid majors, tried in order when measuring the server clock offset. The
+# newest tick across them is used, so one quiet symbol cannot skew the result.
+PROBE_SYMBOLS = ('EURUSD', 'GBPUSD', 'USDJPY', 'XAUUSD', 'GOLD')
+
+# The offset changes only at DST boundaries, so it is worth caching.
+_OFFSET_TTL_SEC = 300
+_offset_cache = {'value': None, 'source': None, 'at': 0.0}
 
 
 class Mt5Error(RuntimeError):
@@ -74,21 +91,55 @@ def _as_dict(record):
     return dict(record)
 
 
+def server_utc_offset(force=False):
+    """
+    The broker clock's offset from UTC, in seconds.
+
+    MetaTrader 5 reports tick and bar times against the *server* clock, so this
+    offset is required to turn any of them into real UTC. Resolution order:
+
+      1. MT5_SERVER_UTC_OFFSET_SEC, if set — authoritative, no probing
+      2. inferred from the newest tick across PROBE_SYMBOLS
+      3. unknown — reported as None rather than guessed
+
+    Case 3 matters over a weekend: with no ticks arriving, the newest one can be
+    days old and would imply a wildly wrong offset. Returning None keeps that
+    out of the data.
+    """
+    override = os.environ.get('MT5_SERVER_UTC_OFFSET_SEC')
+    if override:
+        try:
+            return {'offset_sec': int(override), 'source': 'env'}
+        except ValueError:
+            pass
+
+    now = time.time()
+    if not force and _offset_cache['at'] and (now - _offset_cache['at']) < _OFFSET_TTL_SEC:
+        return {'offset_sec': _offset_cache['value'], 'source': _offset_cache['source']}
+
+    mt5 = _mt5_module()
+    newest = None
+    for symbol in PROBE_SYMBOLS:
+        try:
+            tick = mt5.symbol_info_tick(symbol)
+        except Exception:
+            continue
+        if tick is not None and getattr(tick, 'time', 0):
+            newest = tick.time if newest is None else max(newest, tick.time)
+
+    offset = infer_server_offset(newest, datetime.now(tz=timezone.utc).timestamp())
+    source = 'inferred' if offset is not None else 'unknown'
+    _offset_cache.update({'value': offset, 'source': source, 'at': now})
+    return {'offset_sec': offset, 'source': source}
+
+
 def health():
-    """Connection state plus the timezone offset needed to align timestamps."""
+    """Connection state plus the clock offset needed to align timestamps."""
     mt5 = _mt5_module()
     connect()
     terminal = _as_dict(mt5.terminal_info())
     account = _as_dict(mt5.account_info())
-
-    # Bar timestamps come back in broker-server time while the economic
-    # calendar is UTC. Expose the offset so callers can reconcile the two
-    # rather than silently comparing mismatched clocks.
-    server_offset_sec = None
-    tick = mt5.symbol_info_tick('EURUSD')
-    if tick is not None:
-        server_offset_sec = int(tick.time - datetime.now(tz=timezone.utc).timestamp())
-        server_offset_sec = int(round(server_offset_sec / 900.0) * 900)
+    offset = server_utc_offset()
 
     return {
         'success': terminal is not None,
@@ -104,8 +155,36 @@ def health():
             'server': (account or {}).get('server'),
             'currency': (account or {}).get('currency'),
         },
-        'server_utc_offset_sec': server_offset_sec,
+        'server_utc_offset_sec': offset['offset_sec'],
+        'server_utc_offset_source': offset['source'],
         'read_only': True,
+    }
+
+
+def symbols(search=None, limit=200):
+    """
+    Search the broker's instrument list by name or description.
+
+    Broker naming is not guessable — spot gold is 'GOLD.i#' on XM and 'XAUUSD'
+    elsewhere — so finding an instrument has to be a search.
+    """
+    mt5 = _mt5_module()
+    connect()
+    raw = mt5.symbols_get()
+    rows = [{
+        'name': s.name,
+        'description': getattr(s, 'description', ''),
+        'digits': getattr(s, 'digits', None),
+        'visible': getattr(s, 'visible', None),
+    } for s in (raw or [])]
+
+    kept = filter_symbols(rows, search=search, limit=limit)
+    return {
+        'success': True,
+        'total_available': len(rows),
+        'count': len(kept),
+        'search': search,
+        'symbols': kept,
     }
 
 
@@ -123,21 +202,23 @@ def account():
 def positions(symbol=None):
     mt5 = _mt5_module()
     connect()
+    offset = server_utc_offset()['offset_sec']
     raw = mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()
     rows = [_as_dict(p) for p in (raw or [])]
     for row in rows:
         row['type'] = 'buy' if row.get('type') == 0 else 'sell'
-        row['time_iso'] = _iso_or_none(row.get('time'))
+        row.update(time_fields(row.pop('time', None), offset))
     return {'success': True, 'count': len(rows), 'positions': rows}
 
 
 def orders(symbol=None):
     mt5 = _mt5_module()
     connect()
+    offset = server_utc_offset()['offset_sec']
     raw = mt5.orders_get(symbol=symbol) if symbol else mt5.orders_get()
     rows = [_as_dict(o) for o in (raw or [])]
     for row in rows:
-        row['time_setup_iso'] = _iso_or_none(row.get('time_setup'))
+        row.update(time_fields(row.pop('time_setup', None), offset))
     return {'success': True, 'count': len(rows), 'orders': rows}
 
 
@@ -151,20 +232,25 @@ def quote(symbol):
         raise Mt5Error(f'No tick for {symbol!r}: {_last_error(mt5)}')
     info = _as_dict(mt5.symbol_info(symbol)) or {}
     row = _as_dict(tick)
+    digits = int(info.get('digits') or 5)
+
     spread = None
     if row.get('ask') is not None and row.get('bid') is not None:
-        spread = round(row['ask'] - row['bid'], int(info.get('digits') or 5))
+        spread = round(row['ask'] - row['bid'], digits)
+
     return {
         'success': True,
         'symbol': symbol,
         'bid': row.get('bid'),
         'ask': row.get('ask'),
-        'last': row.get('last'),
+        # CFDs carry no last-trade price or traded volume; both come back as 0.
+        # Reporting them as null keeps a zero from being read as a price.
+        'mid': mid_price(row.get('bid'), row.get('ask'), digits),
+        'last': clean_last(row.get('last')),
+        'volume': row.get('volume') or None,
         'spread': spread,
-        'volume': row.get('volume'),
-        'time': row.get('time'),
-        'time_iso': _iso_or_none(row.get('time')),
-        'digits': info.get('digits'),
+        **time_fields(row.get('time'), server_utc_offset()['offset_sec']),
+        'digits': digits,
         'description': info.get('description'),
     }
 
@@ -188,9 +274,9 @@ def bars(symbol, timeframe='5', count=100, summary=False):
     if rates is None:
         raise Mt5Error(f'No rates for {symbol!r}: {_last_error(mt5)}')
 
+    offset = server_utc_offset()
     rows = [{
-        'time': int(r['time']),
-        'time_iso': _iso_or_none(int(r['time'])),
+        **time_fields(int(r['time']), offset['offset_sec']),
         'open': float(r['open']),
         'high': float(r['high']),
         'low': float(r['low']),
@@ -199,7 +285,13 @@ def bars(symbol, timeframe='5', count=100, summary=False):
         'spread': int(r['spread']),
     } for r in rates]
 
-    out = {'success': True, 'symbol': symbol, 'timeframe': str(timeframe)}
+    out = {
+        'success': True,
+        'symbol': symbol,
+        'timeframe': str(timeframe),
+        'server_utc_offset_sec': offset['offset_sec'],
+        'server_utc_offset_source': offset['source'],
+    }
     if summary:
         from normalize import summarize_bars
         out['summary'] = summarize_bars(rows)
@@ -217,14 +309,29 @@ def deals(from_ts, to_ts, symbol=None):
     """
     mt5 = _mt5_module()
     connect()
-    start = datetime.fromtimestamp(int(from_ts), tz=timezone.utc)
-    end = datetime.fromtimestamp(int(to_ts), tz=timezone.utc)
+    offset = server_utc_offset()
+
+    # history_deals_get interprets its bounds in *server* time, so a UTC window
+    # has to be shifted before querying or the range is wrong by the offset —
+    # three hours on a UTC+3 broker, quietly dropping or adding trades at the
+    # edges. With an unknown offset the bounds are passed through as given.
+    shift = offset['offset_sec'] or 0
+    start = datetime.fromtimestamp(int(from_ts) + shift, tz=timezone.utc)
+    end = datetime.fromtimestamp(int(to_ts) + shift, tz=timezone.utc)
+
     raw = mt5.history_deals_get(start, end, group=symbol) if symbol \
         else mt5.history_deals_get(start, end)
     rows = [_as_dict(d) for d in (raw or [])]
     for row in rows:
-        row['time_iso'] = _iso_or_none(row.get('time'))
-    return {'success': True, 'count': len(rows), 'deals': rows}
+        row.update(time_fields(row.pop('time', None), offset['offset_sec']))
+    return {
+        'success': True,
+        'count': len(rows),
+        'requested_window_utc': {'from': int(from_ts), 'to': int(to_ts)},
+        'server_utc_offset_sec': offset['offset_sec'],
+        'server_utc_offset_source': offset['source'],
+        'deals': rows,
+    }
 
 
 def calendar(path=None):
@@ -258,9 +365,3 @@ def calendar(path=None):
         'exported_at': payload.get('exported_at') if isinstance(payload, dict) else None,
         'events': normalized,
     }
-
-
-def _iso_or_none(ts):
-    if not ts:
-        return None
-    return datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
