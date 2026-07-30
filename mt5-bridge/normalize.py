@@ -48,9 +48,130 @@ def resolve_timeframe(tf):
         f'Unknown timeframe {tf!r}. Supported: {", ".join(TIMEFRAMES)}')
 
 
+# A broker server clock can plausibly sit between UTC-12 and UTC+14. Anything
+# outside that means the tick we measured against was stale, not that the
+# server is in an exotic timezone.
+MAX_PLAUSIBLE_OFFSET_SEC = 50400
+# Server offsets are whole or half hours; rounding absorbs the sub-minute noise
+# of measuring against a tick that arrived a moment ago.
+OFFSET_ROUND_SEC = 1800
+
+
 def iso(ts):
-    """Unix seconds -> ISO 8601 UTC string."""
+    """Unix seconds -> ISO 8601 UTC string. Only for values already in UTC."""
     return datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+
+
+def iso_naive(ts):
+    """
+    Format a server-clock timestamp with no timezone suffix.
+
+    MetaTrader 5 reports tick and bar times as epoch seconds computed against
+    the *broker's* clock, so they are not true Unix UTC. Rendering them with a
+    'Z' would claim UTC and be wrong by the server offset — three hours on a
+    UTC+3 broker. No suffix, no false claim.
+    """
+    return datetime.fromtimestamp(int(ts), tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%S')
+
+
+def infer_server_offset(newest_tick_time, now_utc,
+                        max_abs=MAX_PLAUSIBLE_OFFSET_SEC,
+                        round_to=OFFSET_ROUND_SEC):
+    """
+    Infer the broker's clock offset from a tick timestamp, or None if unknowable.
+
+    The measurement is `tick_time - now_utc`, which only holds while ticks are
+    arriving. Over a weekend the newest tick can be days old, which would yield
+    a large negative number that looks like a real offset. Anything beyond the
+    plausible timezone range is therefore reported as unknown rather than
+    guessed at — a wrong offset silently corrupts every timestamp downstream.
+    """
+    if newest_tick_time is None:
+        return None
+    raw = int(newest_tick_time) - int(now_utc)
+    if abs(raw) > max_abs:
+        return None
+    return int(round(raw / float(round_to)) * round_to)
+
+
+def time_fields(ts, offset_sec):
+    """
+    Expand an MT5 timestamp into explicitly-labelled server and UTC forms.
+
+    Emits time_utc as None when the offset is unknown. A missing value is
+    recoverable; a confidently wrong one is not.
+    """
+    if not ts:
+        return {}
+    out = {'time_server': int(ts), 'time_server_iso': iso_naive(ts)}
+    if offset_sec is None:
+        out['time_utc'] = None
+        out['time_utc_iso'] = None
+    else:
+        utc = int(ts) - int(offset_sec)
+        out['time_utc'] = utc
+        out['time_utc_iso'] = iso(utc)
+    return out
+
+
+def mid_price(bid, ask, digits=None):
+    """
+    Mid price from bid/ask.
+
+    CFDs have no central exchange, so brokers leave last-trade price and traded
+    volume empty. Mid is the usable reference for anything computing levels.
+    """
+    if bid is None or ask is None or not bid or not ask:
+        return None
+    mid = (bid + ask) / 2.0
+    return round(mid, digits) if digits is not None else mid
+
+
+def clean_last(last):
+    """
+    Normalise a CFD's empty last-trade price to None.
+
+    MetaTrader 5 reports 0.0 rather than null when a symbol has no last-trade
+    price. Passed through unchanged, that reads as a real price of zero.
+    """
+    if last is None or last == 0:
+        return None
+    return last
+
+
+def filter_symbols(symbols, search=None, limit=200):
+    """
+    Filter broker symbols by a case-insensitive substring of name or description.
+
+    Brokers expose thousands of instruments under non-obvious names — spot gold
+    is 'GOLD.i#' on some, 'XAUUSD' on others — so discovery needs to be a
+    search, not a guess.
+    """
+    needle = (search or '').strip().upper()
+    kept = []
+    for sym in symbols or []:
+        name = str(sym.get('name') or '')
+        desc = str(sym.get('description') or '')
+        if needle and needle not in name.upper() and needle not in desc.upper():
+            continue
+        kept.append(sym)
+    kept.sort(key=lambda s: str(s.get('name') or ''))
+    return kept[:max(1, int(limit))]
+
+
+def _bar_time_labels(bar):
+    """
+    Server and UTC labels for a bar, whichever timestamp shape it carries.
+
+    Rows from mt5_client arrive pre-expanded by time_fields(); a bare 'time'
+    key is accepted too, and treated as server time since that is what
+    MetaTrader 5 reports.
+    """
+    if 'time_server_iso' in bar:
+        return bar.get('time_server_iso'), bar.get('time_utc_iso')
+    if 'time' in bar:
+        return iso_naive(bar['time']), None
+    return None, None
 
 
 def summarize_bars(bars):
@@ -69,10 +190,17 @@ def summarize_bars(bars):
     opened, closed = first['open'], last['close']
     volumes = [b.get('tick_volume', 0) for b in bars]
 
+    from_server, from_utc = _bar_time_labels(first)
+    to_server, to_utc = _bar_time_labels(last)
+
     return {
         'count': len(bars),
-        'from': iso(first['time']),
-        'to': iso(last['time']),
+        # Server and UTC kept separate and named. A single ambiguous field is
+        # how a three-hour broker offset silently corrupts a correlation.
+        'from_server': from_server,
+        'to_server': to_server,
+        'from_utc': from_utc,
+        'to_utc': to_utc,
         'open': opened,
         'close': closed,
         'high': max(highs),
