@@ -5,3 +5,7 @@ temp_*
 *.log
 discovery-log.json
 rules.json
+
+# Python (mt5-bridge)
+__pycache__/
+*.py[cod]
