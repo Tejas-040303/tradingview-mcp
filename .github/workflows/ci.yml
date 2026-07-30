@@ -31,6 +31,12 @@ jobs:
         # test:unit excludes e2e.test.js, which needs a live TradingView Desktop + CDP.
         run: npm run test:unit
 
+      - name: MT5 bridge unit tests (Python)
+        # Covers mt5-bridge/normalize.py only — pure logic with no MetaTrader5
+        # import, so it runs on Linux. Terminal I/O in mt5_client.py needs
+        # Windows + a running MT5 and is not exercised here.
+        run: python3 -m unittest discover -s mt5-bridge
+
       - name: Audit (high severity)
         run: npm audit --audit-level=high
         continue-on-error: true
