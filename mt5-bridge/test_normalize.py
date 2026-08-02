@@ -7,8 +7,15 @@ Runs anywhere — no MetaTrader5, no terminal, no network:
 import unittest
 
 from normalize import (
+    DEAL_ENTRY,
+    DEAL_REASON,
+    DEAL_TYPE,
     blackout_status,
     clean_last,
+    decode_enums,
+    msc_fields,
+    paginate,
+    summarize_deals,
     filter_calendar,
     filter_symbols,
     infer_server_offset,
@@ -339,6 +346,140 @@ class TestFilterSymbols(unittest.TestCase):
 
     def test_tolerates_empty_input(self):
         self.assertEqual(filter_symbols(None, 'gold'), [])
+
+
+def deal(profit=0.0, entry='out', dtype='buy', reason='client', **extra):
+    """A decoded deal, shaped like what mt5_client emits."""
+    return {
+        'ticket': 1, 'symbol': 'GOLD.i#', 'volume': 0.01, 'price': 4069.07,
+        'profit': profit, 'commission': 0.0, 'swap': 0.0, 'fee': 0.0,
+        'type': dtype, 'entry': entry, 'reason': reason,
+        'time_utc': NOW, **extra,
+    }
+
+
+class TestDecodeEnums(unittest.TestCase):
+    """Raw integers make a journal unreadable; the mapping is not guessable."""
+
+    def test_decodes_a_stop_loss_exit(self):
+        # Straight from a real XM deal: buy, closed out, stopped.
+        row = decode_enums({'type': 0, 'entry': 1, 'reason': 4},
+                           {'type': DEAL_TYPE, 'entry': DEAL_ENTRY,
+                            'reason': DEAL_REASON})
+        self.assertEqual(row['type'], 'buy')
+        self.assertEqual(row['entry'], 'out')
+        self.assertEqual(row['reason'], 'stop_loss')
+
+    def test_keeps_the_raw_value(self):
+        row = decode_enums({'reason': 4}, {'reason': DEAL_REASON})
+        self.assertEqual(row['reason_raw'], 4)
+
+    def test_decodes_mobile_origin(self):
+        row = decode_enums({'reason': 1}, {'reason': DEAL_REASON})
+        self.assertEqual(row['reason'], 'mobile')
+
+    def test_unknown_code_is_surfaced_not_dropped(self):
+        row = decode_enums({'reason': 99}, {'reason': DEAL_REASON})
+        self.assertEqual(row['reason'], 'unknown_99')
+        self.assertEqual(row['reason_raw'], 99)
+
+    def test_missing_field_is_left_alone(self):
+        self.assertEqual(decode_enums({'ticket': 1}, {'reason': DEAL_REASON}),
+                         {'ticket': 1})
+
+    def test_already_decoded_values_are_not_remapped(self):
+        row = decode_enums({'type': 'buy'}, {'type': DEAL_TYPE})
+        self.assertEqual(row['type'], 'buy')
+        self.assertNotIn('type_raw', row)
+
+
+class TestMscFields(unittest.TestCase):
+    def test_converts_millisecond_stamps(self):
+        out = msc_fields(1785411084880, 10800)
+        self.assertEqual(out['time_msc_server'], 1785411084880)
+        self.assertEqual(out['time_msc_utc'], 1785411084880 - 10800 * 1000)
+
+    def test_unknown_offset_yields_no_utc(self):
+        self.assertIsNone(msc_fields(1785411084880, None)['time_msc_utc'])
+
+    def test_missing_value_yields_nothing(self):
+        self.assertEqual(msc_fields(None, 10800), {})
+
+
+class TestSummarizeDeals(unittest.TestCase):
+    def test_counts_only_closing_deals_as_trades(self):
+        out = summarize_deals([deal(entry='in'), deal(profit=5.0, entry='out')])
+        self.assertEqual(out['deals'], 2)
+        self.assertEqual(out['closed_trades'], 1)
+
+    def test_excludes_balance_rows_from_trades(self):
+        out = summarize_deals([deal(profit=100.0, dtype='balance', entry='in'),
+                               deal(profit=5.0)])
+        self.assertEqual(out['closed_trades'], 1)
+        self.assertEqual(out['gross_profit'], 5.0)
+
+    def test_win_rate_and_extremes(self):
+        out = summarize_deals([deal(profit=10.0), deal(profit=-4.78),
+                               deal(profit=2.0), deal(profit=-1.0)])
+        self.assertEqual(out['wins'], 2)
+        self.assertEqual(out['losses'], 2)
+        self.assertEqual(out['win_rate_pct'], 50.0)
+        self.assertEqual(out['best'], 10.0)
+        self.assertEqual(out['worst'], -4.78)
+
+    def test_costs_are_subtracted_from_gross(self):
+        out = summarize_deals([deal(profit=10.0, commission=-1.0, swap=-0.5)])
+        self.assertEqual(out['gross_profit'], 10.0)
+        self.assertEqual(out['costs'], -1.5)
+        self.assertEqual(out['net_profit'], 8.5)
+
+    def test_groups_exits_by_reason(self):
+        out = summarize_deals([deal(reason='stop_loss'), deal(reason='stop_loss'),
+                               deal(reason='take_profit')])
+        self.assertEqual(out['closed_by'], {'stop_loss': 2, 'take_profit': 1})
+
+    def test_reports_symbols_and_window(self):
+        out = summarize_deals([deal(), deal(symbol='EURUSD', time_utc=NOW + 60)])
+        self.assertEqual(out['symbols'], ['EURUSD', 'GOLD.i#'])
+        self.assertTrue(out['from_utc'].endswith('Z'))
+
+    def test_averages_are_none_without_samples(self):
+        out = summarize_deals([deal(profit=5.0)])
+        self.assertEqual(out['avg_win'], 5.0)
+        self.assertIsNone(out['avg_loss'])
+
+    def test_empty_history_is_none(self):
+        self.assertIsNone(summarize_deals([]))
+
+
+class TestPaginate(unittest.TestCase):
+    def setUp(self):
+        self.rows = list(range(421))  # a real month of scalping
+
+    def test_default_page_caps_the_response(self):
+        window, page = paginate(self.rows, limit=100)
+        self.assertEqual(len(window), 100)
+        self.assertEqual(page['total'], 421)
+        self.assertTrue(page['has_more'])
+
+    def test_offset_walks_the_set(self):
+        window, page = paginate(self.rows, limit=100, offset=100)
+        self.assertEqual(window[0], 100)
+        self.assertEqual(page['offset'], 100)
+
+    def test_final_page_reports_no_more(self):
+        window, page = paginate(self.rows, limit=100, offset=400)
+        self.assertEqual(len(window), 21)
+        self.assertFalse(page['has_more'])
+
+    def test_offset_past_the_end_is_empty_not_an_error(self):
+        window, page = paginate(self.rows, limit=100, offset=1000)
+        self.assertEqual(window, [])
+        self.assertFalse(page['has_more'])
+
+    def test_negative_offset_is_clamped(self):
+        _, page = paginate(self.rows, limit=10, offset=-5)
+        self.assertEqual(page['offset'], 0)
 
 
 if __name__ == '__main__':

@@ -16,12 +16,21 @@ import time
 from datetime import datetime, timezone
 
 from normalize import (
+    DEAL_ENTRY,
+    DEAL_REASON,
+    DEAL_TYPE,
+    ORDER_TYPE,
+    POSITION_TYPE,
     clean_last,
+    decode_enums,
     filter_symbols,
     infer_server_offset,
     mid_price,
+    msc_fields,
     normalize_calendar,
+    paginate,
     resolve_timeframe,
+    summarize_deals,
     time_fields,
 )
 
@@ -206,8 +215,9 @@ def positions(symbol=None):
     raw = mt5.positions_get(symbol=symbol) if symbol else mt5.positions_get()
     rows = [_as_dict(p) for p in (raw or [])]
     for row in rows:
-        row['type'] = 'buy' if row.get('type') == 0 else 'sell'
+        decode_enums(row, {'type': POSITION_TYPE, 'reason': DEAL_REASON})
         row.update(time_fields(row.pop('time', None), offset))
+        row.update(msc_fields(row.pop('time_msc', None), offset))
     return {'success': True, 'count': len(rows), 'positions': rows}
 
 
@@ -218,7 +228,9 @@ def orders(symbol=None):
     raw = mt5.orders_get(symbol=symbol) if symbol else mt5.orders_get()
     rows = [_as_dict(o) for o in (raw or [])]
     for row in rows:
+        decode_enums(row, {'type': ORDER_TYPE, 'reason': DEAL_REASON})
         row.update(time_fields(row.pop('time_setup', None), offset))
+        row.update(msc_fields(row.pop('time_setup_msc', None), offset))
     return {'success': True, 'count': len(rows), 'orders': rows}
 
 
@@ -301,7 +313,7 @@ def bars(symbol, timeframe='5', count=100, summary=False):
     return out
 
 
-def deals(from_ts, to_ts, symbol=None):
+def deals(from_ts, to_ts, symbol=None, limit=100, offset=0, summary=False):
     """
     Closed deals in a window — the fill history a trade journal reconciles
     against. Note this reports what *was* traded; signals you skipped leave no
@@ -323,15 +335,27 @@ def deals(from_ts, to_ts, symbol=None):
         else mt5.history_deals_get(start, end)
     rows = [_as_dict(d) for d in (raw or [])]
     for row in rows:
+        decode_enums(row, {'type': DEAL_TYPE, 'entry': DEAL_ENTRY,
+                           'reason': DEAL_REASON})
         row.update(time_fields(row.pop('time', None), offset['offset_sec']))
-    return {
+        row.update(msc_fields(row.pop('time_msc', None), offset['offset_sec']))
+
+    out = {
         'success': True,
-        'count': len(rows),
         'requested_window_utc': {'from': int(from_ts), 'to': int(to_ts)},
         'server_utc_offset_sec': offset['offset_sec'],
         'server_utc_offset_source': offset['source'],
-        'deals': rows,
+        # Summary is computed over the whole window, not just the page.
+        'summary': summarize_deals(rows),
     }
+
+    # An active month is hundreds of deals; returning them all unasked is tens
+    # of thousands of lines. Paginate by default and let the caller opt in.
+    if not summary:
+        window, page = paginate(rows, limit=limit, offset=offset)
+        out['page'] = page
+        out['deals'] = window
+    return out
 
 
 def calendar(path=None):

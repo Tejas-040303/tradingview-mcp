@@ -98,7 +98,7 @@ which PowerShell treats as an operator. `Invoke-RestMethod <url> | ConvertTo-Jso
 | `/orders` | Pending orders |
 | `/quote` | `?symbol=GOLD.i%23` — bid, ask, mid, spread, digits |
 | `/bars` | `?symbol=&timeframe=5&count=100&summary=1` |
-| `/deals` | `?from=&to=&symbol=` — closed fills, for journaling |
+| `/deals` | `?from=&to=&symbol=&limit=100&offset=0&summary=1` — fills, for journaling |
 | `/calendar` | `?currencies=USD&min_importance=high&from=&to=` |
 | `/blackout` | `?currencies=USD&before_min=15&after_min=15` |
 
@@ -183,6 +183,49 @@ set MT5_SERVER_UTC_OFFSET_SEC=10800    :: UTC+3, e.g. XM
 `/deals` shifts its window too: you pass UTC bounds, and it converts them to
 server time before querying, because `history_deals_get` reads server time.
 
+## `/deals` — paginated, summarised, decoded
+
+An active month runs to hundreds of deals — enough to make a single unpaginated
+response hundreds of kilobytes of JSON. So `/deals` **paginates by default**
+(100 per page) and always includes a summary computed over the whole window,
+not just the page:
+
+```json
+{
+  "summary": {
+    "deals": 400, "closed_trades": 200,
+    "wins": 90, "losses": 110, "win_rate_pct": 45.0,
+    "gross_profit": -120.5, "costs": -3.2, "net_profit": -123.7,
+    "best": 40.0, "worst": -55.0, "avg_win": 6.5, "avg_loss": -6.4,
+    "closed_by": {"stop_loss": 120, "mobile": 75, "take_profit": 4, "stop_out": 1}
+  },
+  "page": {"total": 400, "returned": 100, "offset": 0, "limit": 100, "has_more": true}
+}
+```
+
+`summary=1` returns the summary alone. Walk pages with `offset`.
+
+Only deals that closed exposure count as trades — entries carry no realised
+P&L, and balance/credit rows are not trades at all, so both are excluded from
+the win/loss counts.
+
+### Enum fields are decoded
+
+MetaTrader 5 reports `type`, `entry` and `reason` as bare integers. `"reason": 4`
+is unreadable and not guessable, so each is decoded with the raw value kept
+alongside:
+
+```json
+{"type": "buy", "type_raw": 0,
+ "entry": "out", "entry_raw": 1,
+ "reason": "stop_loss", "reason_raw": 4}
+```
+
+`reason` is the useful one for a journal — it separates a stop-out from a
+take-profit from a manual close, and `mobile` / `web` / `expert` tell you where
+the order came from. Unknown codes surface as `unknown_<n>` rather than being
+dropped.
+
 ## CFD price fields
 
 CFDs have no central exchange, so brokers leave last-trade price and traded
@@ -202,11 +245,12 @@ widens sharply around news.
 python -m unittest discover -s mt5-bridge
 ```
 
-56 tests over `normalize.py` — timeframe resolution, bar summaries, MQL5 value
+78 tests over `normalize.py` — timeframe resolution, bar summaries, MQL5 value
 decoding, calendar filtering, blackout windows including boundary cases and
 asymmetric windows, server-offset inference including the stale-weekend-tick
-guard, timestamp labelling, CFD price normalisation, and symbol search. These
-need no terminal and run in CI on Linux.
+guard, timestamp labelling, CFD price normalisation, symbol search, deal enum
+decoding, deal summaries and pagination. These need no terminal and run in CI
+on Linux.
 
 `mt5_client.py` needs Windows and a live terminal, so it is **not** covered.
 Verify it manually with the `curl` calls above.
