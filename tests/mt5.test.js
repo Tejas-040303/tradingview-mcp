@@ -95,6 +95,26 @@ describe('mt5 client — defaults', () => {
     assert.equal(p.get('offset'), '50');
   });
 
+  test('analytics covers 30 days and omits the curve by default', async () => {
+    // The equity curve is one point per trade — hundreds of rows — so it is
+    // opt-in for the same reason deals and bars summarise by default.
+    const s = stub();
+    await mt5.analytics({ _deps: { fetch: s.fetch } });
+    const p = params(s.last().url);
+    assert.equal(Number(p.get('to')) - Number(p.get('from')), 30 * 86400);
+    assert.equal(p.has('curve'), false);
+  });
+
+  test('analytics passes through balance and grouping', async () => {
+    const s = stub();
+    await mt5.analytics({ starting_balance: 385, group_by: 'session,hour', curve: true,
+      _deps: { fetch: s.fetch } });
+    const p = params(s.last().url);
+    assert.equal(p.get('starting_balance'), '385');
+    assert.equal(p.get('group_by'), 'session,hour');
+    assert.equal(p.get('curve'), '1');
+  });
+
   test('calendar defaults to high importance', async () => {
     // The HTTP route stays unfiltered; the tool is opinionated because an
     // unfiltered calendar is hundreds of rows of context.

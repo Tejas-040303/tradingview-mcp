@@ -12,3 +12,6 @@ __pycache__/
 
 # MT5 calendar exports (written by calendar_export.mq5)
 mt5-bridge/mcp_calendar.json
+
+# Launcher logs
+logs/

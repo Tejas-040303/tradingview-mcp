@@ -7,7 +7,7 @@ Two independent MCP servers:
 | Server | Tools | Talks to | Needs |
 |---|---|---|---|
 | `tradingview` | 84 | TradingView Desktop over CDP | port 9222 |
-| `mt5` | 10, read-only | MetaTrader 5 via a local Python bridge | port 8765 |
+| `mt5` | 11, read-only | MetaTrader 5 via a local Python bridge | port 8765 |
 
 They are separate processes on purpose: closing TradingView must not take the broker tools down, and either can be registered alone. Everything stays on localhost.
 
@@ -172,7 +172,32 @@ Ask Claude: *"Use tv_health_check to verify TradingView is connected"*
 
 And, if you registered the MT5 server: *"Use mt5_health to check the broker connection"* (the bridge must be running — see below).
 
-### 5. Optional — the MT5 bridge
+### 5. One command to start everything
+
+Instead of juggling terminals for TradingView and the bridge:
+
+```bash
+npm run start:all      # start whatever is not already running
+npm run status         # report what is up, start nothing
+```
+
+It probes both services first, starts only what is missing, and leaves anything
+already running alone. Child output is streamed with a `[tv]` / `[bridge]`
+prefix and mirrored to `logs/`; lines that look like errors are surfaced even
+without `--verbose`, and a service that exits non-zero prints the tail of its
+log. Ctrl+C stops only the services it started.
+
+```bash
+node scripts/start.js --no-tv       # bridge only
+node scripts/start.js --no-bridge   # TradingView only
+node scripts/start.js --verbose     # stream all child output
+```
+
+After the bridge is up it reports whether MT5 is actually connected — a bridge
+answering on its port and a terminal being reachable are different things, and
+conflating them is how "it's running" turns into a confusing debugging session.
+
+### 6. Optional — the MT5 bridge
 
 MetaTrader 5 has no Node binding, so the `mt5` server talks to a small local Python process:
 
@@ -370,7 +395,7 @@ Read `line.new()`, `label.new()`, `table.new()`, `box.new()` output from any vis
 | `ui_open_panel` / `ui_click` / `ui_evaluate` | UI automation |
 | `tv_launch` / `tv_health_check` / `tv_discover` | Connection management |
 
-## Tool Reference — MT5 (10 read-only tools)
+## Tool Reference — MT5 (11 read-only tools)
 
 Served by the separate `mt5` server. Requires `mt5-bridge/bridge.py` running. **None of these can open, modify or close a position.**
 
@@ -383,6 +408,7 @@ Served by the separate `mt5` server. Requires `mt5-bridge/bridge.py` running. **
 | `mt5_bars` | Broker OHLCV. Summary by default | ~600 B (summary) |
 | `mt5_positions` / `mt5_orders` | What is open right now, types decoded | varies |
 | `mt5_deals` | Closed fills. **Summary by default** — win rate, net P&L, exit reasons | ~500 B / ~15 KB paged |
+| `mt5_analytics` | Expectancy, payoff ratio, drawdown, streaks, and performance by session / exit reason / symbol / hour | ~2-5 KB |
 | `mt5_calendar` | Scheduled events with importance, forecast, previous, `actual` | ~2-4 KB |
 | `mt5_blackout` | **"Is it safe to act right now"** — one deterministic answer | ~600 B |
 

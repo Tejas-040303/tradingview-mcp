@@ -23,7 +23,9 @@
     "test:all": "node --test tests/e2e.test.js tests/pine_analyze.test.js tests/cli.test.js tests/sanitization.test.js tests/replay.test.js tests/launch.test.js tests/chart_indicator.test.js tests/chart_history.test.js tests/update.test.js tests/wait.test.js tests/mt5.test.js",
     "test:verbose": "node --test --test-reporter=spec tests/e2e.test.js tests/pine_analyze.test.js",
     "test:count": "node --test --test-reporter=spec tests/e2e.test.js 2>&1 | tail -5",
-    "start:mt5": "node src/mt5-server.js"
+    "start:mt5": "node src/mt5-server.js",
+    "start:all": "node scripts/start.js",
+    "status": "node scripts/start.js --status"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",

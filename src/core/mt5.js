@@ -135,6 +135,18 @@ export function deals({ from, to, symbol, summary = true, limit = 50, offset = 0
   }, _deps);
 }
 
+export function analytics({ from, to, symbol, starting_balance, group_by, curve = false, _deps } = {}) {
+  const now = Math.floor(Date.now() / 1000);
+  return get('/analytics', {
+    from: from ?? now - 30 * 86400,
+    to: to ?? now,
+    symbol,
+    starting_balance,
+    group_by,
+    curve: curve ? 1 : '',
+  }, _deps);
+}
+
 export function calendar({ currencies, min_importance = 'high', from, to, limit = 100, _deps } = {}) {
   return get('/calendar', {
     currencies, min_importance, from, to, limit,

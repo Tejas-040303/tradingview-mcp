@@ -86,7 +86,7 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 
 ## MT5 Broker Data (separate MCP server)
 
-A second MCP server — `mt5`, 10 read-only tools — exposes a MetaTrader 5 terminal
+A second MCP server — `mt5`, 11 read-only tools — exposes a MetaTrader 5 terminal
 via the local Python bridge (`mt5-bridge/bridge.py`). It is a **different
 process** from this one: TradingView tools need CDP on 9222, MT5 tools need the
 bridge on 8765, and neither should fail because the other is closed.
@@ -119,6 +119,11 @@ the calendar file predates that conversion and the offset is unknown; re-run
   `limit`/`offset` to page through individual fills.
 - **Only shows trades that were TAKEN.** Skipped setups leave no trace in MT5,
   so any journal that needs them must log signals separately.
+- `mt5_analytics` → the deeper question: expectancy, payoff ratio, max drawdown,
+  win/loss streaks, and performance grouped by exit reason, session, symbol,
+  weekday or hour. Answers "when do I lose money", not just "how much".
+  Pass `starting_balance` for drawdown percentages; without it they are null
+  rather than computed against an invented base.
 
 ### Comparing TradingView against the broker
 The same instrument has different names in each system — `FX:XAUUSD` on
@@ -147,6 +152,7 @@ unknown, `time_utc` is null rather than a guess.
 | `mt5_deals` (summary) | ~500 bytes |
 | `mt5_calendar` (high, one currency) | ~2-4 KB |
 | `mt5_deals` (50 rows) | ~15 KB |
+| `mt5_analytics` | ~2-5 KB (curve omitted unless asked) |
 
 If an MT5 tool reports the bridge is unreachable, the bridge is not running:
 `python mt5-bridge/bridge.py`

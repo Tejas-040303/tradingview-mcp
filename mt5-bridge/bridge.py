@@ -24,6 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 import mt5_client
+from analytics import analyze
 from normalize import blackout_status, filter_calendar
 
 DEFAULT_PORT = 8765
@@ -92,6 +93,34 @@ def route(path, params):
             offset=int(_one(params, 'offset', 0)),
             summary=_truthy(_one(params, 'summary', '')),
         )
+
+    if path == '/analytics':
+        now = int(time.time())
+        # Analytics needs every deal in the window, not a page of them.
+        data = mt5_client.deals(
+            from_ts=int(_one(params, 'from', now - 30 * 86400)),
+            to_ts=int(_one(params, 'to', now)),
+            symbol=_one(params, 'symbol'),
+            summary=False,
+            limit=1_000_000,
+        )
+        deals_rows = data.get('deals') or []
+        balance = _one(params, 'starting_balance')
+        groups = _csv(params, 'group_by') or ['reason', 'session', 'symbol']
+        out = analyze(
+            deals_rows,
+            starting_balance=float(balance) if balance else None,
+            group_by=tuple(groups),
+        )
+        if not _truthy(_one(params, 'curve', '')):
+            # The curve is one point per trade — hundreds of rows. Opt in.
+            out['equity_curve_points'] = len(out.pop('equity_curve'))
+        return {
+            'success': True,
+            'requested_window_utc': data['requested_window_utc'],
+            'summary': data['summary'],
+            **out,
+        }
 
     if path == '/calendar':
         data = mt5_client.calendar(path=_one(params, 'file'))
@@ -195,7 +224,8 @@ def main():
 
     server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
     print(f'Read-only bridge listening on http://127.0.0.1:{args.port}')
-    print('Routes: /health /account /positions /orders /quote /bars /deals /calendar /blackout')
+    print('Routes: /health /account /symbols /positions /orders /quote /bars /deals'
+          ' /analytics /calendar /blackout')
     try:
         server.serve_forever()
     except KeyboardInterrupt:
