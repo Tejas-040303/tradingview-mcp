@@ -105,6 +105,21 @@ export function registerMt5Tools(server) {
   );
 
   server.tool(
+    'mt5_analytics',
+    'Deep analysis of closed trade history: expectancy, payoff ratio, win/loss streaks, max drawdown, and performance broken down by exit reason, session, symbol, weekday or hour. Answers "when do I lose money" rather than just "how much". Pass starting_balance to get drawdown as a percentage.',
+    {
+      from: z.coerce.number().optional().describe('Window start, unix seconds UTC (default 30 days ago)'),
+      to: z.coerce.number().optional().describe('Window end, unix seconds UTC (default now)'),
+      symbol: z.string().optional().describe('Narrow to one symbol'),
+      starting_balance: z.coerce.number().optional().describe('Account balance at the window start — required for drawdown percentages'),
+      group_by: z.string().optional().describe('Comma-separated: reason, session, symbol, weekday, hour, type (default reason,session,symbol)'),
+      curve: z.coerce.boolean().optional().describe('Include the full equity curve, one point per trade (default false — it is long)'),
+    },
+    guard(({ from, to, symbol, starting_balance, group_by, curve }) =>
+      core.analytics({ from, to, symbol, starting_balance, group_by, curve: curve === true })),
+  );
+
+  server.tool(
     'mt5_calendar',
     'Scheduled economic events from the terminal calendar, with importance, forecast, previous and — for events already released — actual. Defaults to high-importance only; widen deliberately, since an unfiltered calendar runs to hundreds of rows.',
     {

@@ -113,6 +113,7 @@ which PowerShell treats as an operator. `Invoke-RestMethod <url> | ConvertTo-Jso
 | `/quote` | `?symbol=GOLD.i%23` — bid, ask, mid, spread, digits |
 | `/bars` | `?symbol=&timeframe=5&count=100&summary=1` |
 | `/deals` | `?from=&to=&symbol=&limit=100&offset=0&summary=1` — fills, for journaling |
+| `/analytics` | `?from=&to=&starting_balance=&group_by=&curve=1` — expectancy, drawdown, streaks, breakdowns |
 | `/calendar` | `?currencies=USD&min_importance=high&from=&to=` |
 | `/blackout` | `?currencies=USD&before_min=15&after_min=15` |
 
@@ -335,13 +336,17 @@ widens sharply around news.
 python -m unittest discover -s mt5-bridge
 ```
 
-111 tests, all runnable without a terminal and gated in CI on Linux.
+144 tests, all runnable without a terminal and gated in CI on Linux.
 
 `test_normalize.py` (88) covers the pure logic: timeframe resolution, bar
 summaries, MQL5 value decoding, calendar filtering, blackout windows including
 boundary cases and asymmetric windows, server-offset inference including the
 stale-weekend-tick guard, timestamp labelling, CFD price normalisation, symbol
 search, deal enum decoding, deal summaries and pagination.
+
+`test_analytics.py` (33) covers the history analytics — equity curve, drawdown
+including the unrecovered case, grouping by session/reason/symbol/hour/weekday,
+streaks and expectancy.
 
 `test_mt5_client.py` (23) exercises every route end to end against a fake
 MetaTrader 5 module. These assert plumbing, not market behaviour — but that is

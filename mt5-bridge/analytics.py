@@ -1,0 +1,257 @@
+"""
+Trade-history analytics.
+
+Pure functions over decoded deals — no MetaTrader5, no filesystem, no network —
+so the dashboard, the MCP tools and the eventual backtester all share one
+tested implementation rather than each growing their own arithmetic.
+
+Input is the deal shape mt5_client.deals() emits: enums decoded to strings
+(`type`, `entry`, `reason`), and timestamps expanded so `time_utc` is real UTC
+or None. Everything here joins on `time_utc`, never the broker clock.
+"""
+from datetime import datetime, timezone
+
+from normalize import CLOSING_ENTRIES, iso
+
+# Trading sessions by UTC hour. Boundaries are conventional rather than exact —
+# they exist to answer "when do I lose money", which does not need precision.
+SESSIONS = (
+    ('asia', 0, 7),
+    ('london', 7, 12),
+    ('overlap', 12, 16),   # London/New York — usually the most active
+    ('new_york', 16, 21),
+    ('late', 21, 24),
+)
+
+WEEKDAYS = ('monday', 'tuesday', 'wednesday', 'thursday', 'friday',
+            'saturday', 'sunday')
+
+
+def closed_trades(deals):
+    """
+    Deals that closed exposure and carry realised P&L.
+
+    Entries hold none, and balance/credit rows are not trades at all — counting
+    either would distort every statistic downstream.
+    """
+    return [d for d in (deals or [])
+            if str(d.get('entry')) in CLOSING_ENTRIES
+            and str(d.get('type')) in ('buy', 'sell')]
+
+
+def session_of(ts_utc):
+    """Trading session for a UTC timestamp, or None if the time is unknown."""
+    if ts_utc is None:
+        return None
+    hour = datetime.fromtimestamp(int(ts_utc), tz=timezone.utc).hour
+    for name, start, end in SESSIONS:
+        if start <= hour < end:
+            return name
+    return None
+
+
+def weekday_of(ts_utc):
+    if ts_utc is None:
+        return None
+    return WEEKDAYS[datetime.fromtimestamp(int(ts_utc), tz=timezone.utc).weekday()]
+
+
+def _net(deal):
+    """Realised P&L including costs, which is what actually hit the account."""
+    return ((deal.get('profit') or 0)
+            + (deal.get('commission') or 0)
+            + (deal.get('swap') or 0)
+            + (deal.get('fee') or 0))
+
+
+def equity_curve(deals, starting_balance=None):
+    """
+    Cumulative realised P&L over time, oldest first.
+
+    Deals with no resolved UTC time are dropped rather than guessed at — an
+    equity curve ordered by a broker clock while everything else uses UTC is
+    worse than a shorter curve.
+    """
+    trades = [d for d in closed_trades(deals) if d.get('time_utc') is not None]
+    trades.sort(key=lambda d: d['time_utc'])
+
+    points, cumulative = [], 0.0
+    for deal in trades:
+        cumulative += _net(deal)
+        point = {
+            'time_utc': deal['time_utc'],
+            'time': iso(deal['time_utc']),
+            'profit': round(_net(deal), 2),
+            'cumulative': round(cumulative, 2),
+            'symbol': deal.get('symbol'),
+        }
+        if starting_balance is not None:
+            point['balance'] = round(starting_balance + cumulative, 2)
+        points.append(point)
+    return points
+
+
+def max_drawdown(curve):
+    """
+    Largest peak-to-trough decline along an equity curve.
+
+    Percentage is reported only when the curve carries balances — a drawdown of
+    50 means nothing without knowing 50 out of what, and inventing a base is
+    how a small account's risk gets understated.
+    """
+    if not curve:
+        return {'max_drawdown': 0.0, 'max_drawdown_pct': None,
+                'peak_at': None, 'trough_at': None, 'recovered_at': None}
+
+    series = [(p['time_utc'], p.get('balance', p['cumulative'])) for p in curve]
+    has_balance = 'balance' in curve[0]
+
+    peak_value, peak_at = series[0][1], series[0][0]
+    worst = {'drop': 0.0, 'pct': None, 'peak_at': None, 'trough_at': None,
+             'peak_value': None}
+
+    for ts, value in series:
+        if value > peak_value:
+            peak_value, peak_at = value, ts
+        drop = peak_value - value
+        if drop > worst['drop']:
+            worst = {'drop': drop, 'peak_at': peak_at, 'trough_at': ts,
+                     'peak_value': peak_value,
+                     'pct': (drop / peak_value * 100) if (has_balance and peak_value > 0) else None}
+
+    recovered_at = None
+    if worst['trough_at'] is not None:
+        for ts, value in series:
+            if ts > worst['trough_at'] and value >= worst['peak_value']:
+                recovered_at = ts
+                break
+
+    return {
+        'max_drawdown': round(worst['drop'], 2),
+        'max_drawdown_pct': round(worst['pct'], 2) if worst['pct'] is not None else None,
+        'peak_at': iso(worst['peak_at']) if worst['peak_at'] else None,
+        'trough_at': iso(worst['trough_at']) if worst['trough_at'] else None,
+        'recovered_at': iso(recovered_at) if recovered_at else None,
+        'still_in_drawdown': worst['trough_at'] is not None and recovered_at is None,
+    }
+
+
+def _bucket_stats(trades):
+    nets = [_net(d) for d in trades]
+    wins = [n for n in nets if n > 0]
+    losses = [n for n in nets if n < 0]
+    return {
+        'trades': len(trades),
+        'wins': len(wins),
+        'losses': len(losses),
+        'win_rate_pct': round(len(wins) / len(trades) * 100, 1) if trades else None,
+        'net': round(sum(nets), 2),
+        'avg': round(sum(nets) / len(trades), 2) if trades else None,
+        'avg_win': round(sum(wins) / len(wins), 2) if wins else None,
+        'avg_loss': round(sum(losses) / len(losses), 2) if losses else None,
+        'best': round(max(nets), 2) if nets else None,
+        'worst': round(min(nets), 2) if nets else None,
+        'volume': round(sum(d.get('volume') or 0 for d in trades), 2),
+    }
+
+
+GROUP_KEYS = ('symbol', 'reason', 'type', 'session', 'weekday', 'hour')
+
+
+def group_performance(deals, key='reason'):
+    """
+    Break performance down by one dimension.
+
+    'session' and 'weekday' answer when you lose money; 'reason' answers how
+    trades end — a stop_loss-heavy distribution against almost no take_profit
+    says something different from the reverse.
+    """
+    if key not in GROUP_KEYS:
+        raise ValueError(f'Unknown group key {key!r}. Supported: {", ".join(GROUP_KEYS)}')
+
+    buckets = {}
+    for deal in closed_trades(deals):
+        if key == 'session':
+            label = session_of(deal.get('time_utc'))
+        elif key == 'weekday':
+            label = weekday_of(deal.get('time_utc'))
+        elif key == 'hour':
+            ts = deal.get('time_utc')
+            label = (datetime.fromtimestamp(int(ts), tz=timezone.utc).hour
+                     if ts is not None else None)
+        else:
+            label = deal.get(key)
+        label = 'unknown' if label is None else label
+        buckets.setdefault(label, []).append(deal)
+
+    return {str(label): _bucket_stats(trades)
+            for label, trades in sorted(buckets.items(), key=lambda kv: str(kv[0]))}
+
+
+def streaks(deals):
+    """Longest and current runs of wins and losses, in chronological order."""
+    trades = [d for d in closed_trades(deals) if d.get('time_utc') is not None]
+    trades.sort(key=lambda d: d['time_utc'])
+
+    longest_win = longest_loss = run = 0
+    current_kind = None
+    for deal in trades:
+        net = _net(deal)
+        kind = 'win' if net > 0 else ('loss' if net < 0 else None)
+        if kind is None:
+            continue
+        run = run + 1 if kind == current_kind else 1
+        current_kind = kind
+        if kind == 'win':
+            longest_win = max(longest_win, run)
+        else:
+            longest_loss = max(longest_loss, run)
+
+    return {
+        'longest_win_streak': longest_win,
+        'longest_loss_streak': longest_loss,
+        'current_streak': run if current_kind else 0,
+        'current_streak_kind': current_kind,
+    }
+
+
+def expectancy(deals):
+    """
+    Average money per trade, and the win/loss shape behind it.
+
+    Negative expectancy is the number that matters before anything is
+    automated: automation scales whatever it is given.
+    """
+    trades = closed_trades(deals)
+    if not trades:
+        return {'trades': 0, 'expectancy': None}
+
+    nets = [_net(d) for d in trades]
+    wins = [n for n in nets if n > 0]
+    losses = [n for n in nets if n < 0]
+    win_rate = len(wins) / len(trades)
+    avg_win = sum(wins) / len(wins) if wins else 0.0
+    avg_loss = sum(losses) / len(losses) if losses else 0.0
+
+    return {
+        'trades': len(trades),
+        'expectancy': round(sum(nets) / len(trades), 4),
+        'win_rate_pct': round(win_rate * 100, 1),
+        'avg_win': round(avg_win, 2) if wins else None,
+        'avg_loss': round(avg_loss, 2) if losses else None,
+        # How many times the average win covers the average loss. Below 1 with
+        # a sub-50% win rate is a losing combination on both counts.
+        'payoff_ratio': round(avg_win / abs(avg_loss), 2) if wins and losses else None,
+    }
+
+
+def analyze(deals, starting_balance=None, group_by=('reason', 'session', 'symbol')):
+    """Everything the history view needs, in one pass."""
+    curve = equity_curve(deals, starting_balance=starting_balance)
+    return {
+        'expectancy': expectancy(deals),
+        'streaks': streaks(deals),
+        'drawdown': max_drawdown(curve),
+        'groups': {key: group_performance(deals, key) for key in group_by},
+        'equity_curve': curve,
+    }
