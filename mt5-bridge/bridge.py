@@ -98,7 +98,10 @@ def route(path, params):
         events = filter_calendar(
             data['events'],
             currencies=_csv(params, 'currencies'),
-            min_importance=_one(params, 'min_importance', 'low'),
+            # No filter specified means no filter. Defaulting to 'low' silently
+            # dropped every event the terminal rates as 'none', so the count
+            # came back short of what the exporter reported.
+            min_importance=_one(params, 'min_importance', 'none'),
             from_ts=int(_one(params, 'from')) if _one(params, 'from') else None,
             to_ts=int(_one(params, 'to')) if _one(params, 'to') else None,
         )

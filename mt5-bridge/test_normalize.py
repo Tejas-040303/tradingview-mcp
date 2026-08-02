@@ -149,6 +149,15 @@ class TestFilterCalendar(unittest.TestCase):
         kept = filter_calendar(self.rows, from_ts=NOW + 15 * 60)
         self.assertEqual(len(kept), 2)
 
+    def test_none_floor_keeps_unrated_events(self):
+        # The /calendar default. Anything stricter silently drops the events
+        # the terminal rates 'none', which is how an export of 1000 came back
+        # as 987.
+        rows = normalize_calendar([event(5, importance='none'),
+                                   event(10, importance='high')])
+        self.assertEqual(len(filter_calendar(rows, min_importance='none')), 2)
+        self.assertEqual(len(filter_calendar(rows, min_importance='low')), 1)
+
 
 class TestBlackoutStatus(unittest.TestCase):
     """The ±15m rule an automated strategy consults before acting."""

@@ -140,6 +140,40 @@ in the loop:
 landed. An event blacks out from `before_min` ahead of it to `after_min` after.
 Defaults to high-importance events only; pass `min_importance=moderate` to widen.
 
+### Reading the calendar
+
+`/calendar` returns everything unless you filter it. `min_importance` defaults
+to `none` — no filter means no filter — so narrow it explicitly:
+
+```powershell
+# Upcoming high-impact USD events
+(Invoke-RestMethod "http://127.0.0.1:8765/calendar?currencies=USD&min_importance=high").events |
+  Select-Object time, event, actual, forecast, previous | Format-Table
+
+# Only events that have already been released, where `actual` is populated
+$now = [DateTimeOffset]::UtcNow.ToUnixTimeSeconds()
+(Invoke-RestMethod "http://127.0.0.1:8765/calendar?currencies=USD&min_importance=high").events |
+  Where-Object { $_.timestamp -lt $now } |
+  Select-Object time, event, actual, forecast, previous | Format-Table
+```
+
+**`actual` is `null` until an event is released** — that is correct, not missing
+data. `forecast` and `previous` are known ahead of time; `actual` only exists
+afterwards. Select the column explicitly, or you will not see it.
+
+### Choosing the export window
+
+The script's `DaysBack` / `DaysAhead` inputs serve two different jobs:
+
+| Purpose | Suggested inputs |
+|---|---|
+| Blackout checks | `DaysBack=7`, `DaysAhead=21` (the default) |
+| Impact studies | `DaysBack=365`, `DaysAhead=21`, `Currencies=USD` |
+
+A week of history is enough to know what just happened, but measuring how gold
+reacts to CPI needs a year of releases with their `actual` vs `forecast`
+values. Filtering to a single currency keeps the longer window small.
+
 ## Timestamps — read this before joining data
 
 **MetaTrader 5 reports tick and bar times against the broker's clock, not UTC.**
