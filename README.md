@@ -1,9 +1,21 @@
 # TradingView MCP Bridge
 
-Personal AI assistant for your TradingView Desktop charts. Connects Claude Code to your locally running TradingView app via Chrome DevTools Protocol for AI-assisted chart analysis, Pine Script development, and workflow automation.
+Personal AI assistant for your charts and your broker account. Connects Claude Code to your locally running TradingView Desktop app via Chrome DevTools Protocol for AI-assisted chart analysis, Pine Script development, and workflow automation — and, optionally, to a **MetaTrader 5 terminal** for read-only account, market and economic-calendar data.
+
+Two independent MCP servers:
+
+| Server | Tools | Talks to | Needs |
+|---|---|---|---|
+| `tradingview` | 84 | TradingView Desktop over CDP | port 9222 |
+| `mt5` | 10, read-only | MetaTrader 5 via a local Python bridge | port 8765 |
+
+They are separate processes on purpose: closing TradingView must not take the broker tools down, and either can be registered alone. Everything stays on localhost.
+
+> [!NOTE]
+> This is a fork of [tradesdontlie/tradingview-mcp](https://github.com/tradesdontlie/tradingview-mcp). The TradingView side is upstream's work; the `mt5-bridge/` subsystem and the `mt5` MCP server are additions in this fork.
 
 > [!WARNING]
-> **This tool is not affiliated with, endorsed by, or associated with TradingView Inc.** It interacts with your locally running TradingView Desktop application via Chrome DevTools Protocol. Review the [Disclaimer](#disclaimer) before use.
+> **This tool is not affiliated with, endorsed by, or associated with TradingView Inc., MetaQuotes Software Corp., or any broker.** It interacts with applications already running on your own machine. Review the [Disclaimer](#disclaimer) before use.
 
 > [!IMPORTANT]
 > **Requires a valid TradingView subscription.** This tool does not bypass or circumvent any TradingView paywall or access control. It reads from and controls the TradingView Desktop app already running on your machine.
@@ -26,7 +38,7 @@ The debug port is disabled by default and must be explicitly enabled by you usin
 - Store, transmit, or redistribute any market data
 - Work without a valid TradingView subscription and installed Desktop app
 - Bypass any TradingView paywall or access restriction
-- Execute real trades (chart interaction only)
+- Execute real trades — the TradingView side is chart interaction only, and the MT5 side is read-only with no order-placement code
 - Work if TradingView changes their internal Electron structure
 
 ## Research Context
@@ -47,10 +59,20 @@ See [RESEARCH.md](RESEARCH.md) for open questions, findings, and related work.
 
 ## Prerequisites
 
+For the TradingView side:
+
 - **TradingView Desktop app** (paid subscription required for real-time data)
 - **Node.js 18+**
 - **Claude Code** with MCP support (for MCP tools) or any terminal (for CLI)
 - **macOS, Windows, or Linux**
+
+For the optional MT5 side:
+
+- **Windows** — the official `MetaTrader5` Python package does not exist for macOS or Linux
+- **MetaTrader 5 terminal**, logged in to a broker account
+- **Python 3.9+** and `pip install MetaTrader5`
+
+Neither side depends on the other. Run one, the other, or both.
 
 ## What It Does
 
@@ -68,11 +90,19 @@ Gives your AI assistant eyes and hands on your own chart:
 - **CLI access** — every MCP tool is also a `tv` CLI command, pipe-friendly with JSON output
 - **Launch TradingView** — auto-detect and launch with debug mode from any platform
 
+And, with the optional MT5 bridge running:
+
+- **Broker account state** — balance, equity, margin, open positions and pending orders
+- **Broker market data** — bid/ask/mid, spread, and OHLCV straight from your broker's feed
+- **Trade history** — closed fills summarised into win rate, net P&L and exit reasons, for journaling
+- **Economic calendar** — scheduled events with importance, forecast, previous, and `actual` once released
+- **News blackout check** — one deterministic answer to "is it safe to act right now"
+
 ## Install with Claude Code
 
 Paste this into Claude Code and it will handle the rest:
 
-> Install the TradingView MCP server. Clone https://github.com/tradesdontlie/tradingview-mcp.git, run npm install, add it to my MCP config at ~/.claude/.mcp.json, and launch TradingView with the debug port. Then verify the connection with tv_health_check.
+> Install the TradingView MCP server. Clone https://github.com/Tejas-040303/tradingview-mcp.git, run npm install, add it to my MCP config at ~/.claude/.mcp.json, and launch TradingView with the debug port. Then verify the connection with tv_health_check.
 
 Or follow the manual steps below.
 
@@ -81,7 +111,7 @@ Or follow the manual steps below.
 ### 1. Install
 
 ```bash
-git clone https://github.com/tradesdontlie/tradingview-mcp.git
+git clone https://github.com/Tejas-040303/tradingview-mcp.git
 cd tradingview-mcp
 npm install
 ```
@@ -123,16 +153,39 @@ Add to your Claude Code MCP config (`~/.claude/.mcp.json` or project `.mcp.json`
     "tradingview": {
       "command": "node",
       "args": ["/path/to/tradingview-mcp/src/server.js"]
+    },
+    "mt5": {
+      "command": "node",
+      "args": ["/path/to/tradingview-mcp/src/mt5-server.js"]
     }
   }
 }
 ```
 
-Replace `/path/to/tradingview-mcp` with your actual path.
+Replace `/path/to/tradingview-mcp` with your actual path. Omit the `mt5` entry if you are not using the broker side.
+
+MCP servers only load at startup, so **fully exit and relaunch Claude Code** after editing this — reloading a session is not enough.
 
 ### 4. Verify
 
 Ask Claude: *"Use tv_health_check to verify TradingView is connected"*
+
+And, if you registered the MT5 server: *"Use mt5_health to check the broker connection"* (the bridge must be running — see below).
+
+### 5. Optional — the MT5 bridge
+
+MetaTrader 5 has no Node binding, so the `mt5` server talks to a small local Python process:
+
+```bash
+pip install MetaTrader5
+python mt5-bridge/bridge.py
+```
+
+It binds `127.0.0.1` only and serves GET requests exclusively — every other verb returns 405, and no route can place, modify or cancel an order.
+
+For the economic calendar, compile and run `mt5-bridge/calendar_export.mq5` inside MetaEditor once. The Python package exposes no calendar API, so the terminal-side script writes the data out; the bridge then finds the file on its own.
+
+Full setup, routes and caveats: **[mt5-bridge/README.md](mt5-bridge/README.md)**.
 
 ## CLI
 
@@ -214,8 +267,16 @@ Claude reads [`CLAUDE.md`](CLAUDE.md) automatically when working in this project
 | "Set up a 4-chart grid" | `pane_set_layout` → `pane_set_symbol` for each pane |
 | "Draw a level at 24500" | `draw_shape` (horizontal_line) |
 | "Take a screenshot" | `capture_screenshot` |
+| "Is it safe to trade right now?" | `mt5_blackout` |
+| "How did last month go?" | `mt5_deals` (summary) |
+| "What's my account state?" | `mt5_health` → `mt5_account` → `mt5_positions` |
+| "What does my broker call gold?" | `mt5_symbol_search` |
+| "Mark my real entries on the chart" | `mt5_deals` → `draw_shape` for each fill |
+| "Which losses landed near news?" | `mt5_deals` → `mt5_calendar`, joined on `time_utc` |
 
-## Tool Reference (78 MCP tools)
+The last two are the point of running both servers together — neither system can answer them alone.
+
+## Tool Reference — TradingView (84 MCP tools)
 
 ### Chart Reading
 
@@ -309,6 +370,29 @@ Read `line.new()`, `label.new()`, `table.new()`, `box.new()` output from any vis
 | `ui_open_panel` / `ui_click` / `ui_evaluate` | UI automation |
 | `tv_launch` / `tv_health_check` / `tv_discover` | Connection management |
 
+## Tool Reference — MT5 (10 read-only tools)
+
+Served by the separate `mt5` server. Requires `mt5-bridge/bridge.py` running. **None of these can open, modify or close a position.**
+
+| Tool | When to use | Output size |
+|------|------------|-------------|
+| `mt5_health` | First call — bridge and terminal state, account identity, broker clock offset | ~300 B |
+| `mt5_account` | Balance, equity, margin, free margin, leverage | ~300 B |
+| `mt5_symbol_search` | Find what your broker calls an instrument. **Names are not guessable** — spot gold is `GOLD.i#` on XM, and `XAUUSD` may not exist | ~1 KB |
+| `mt5_quote` | Bid, ask, **mid**, spread. CFDs report no last price or volume, so both are null — use `mid` | ~250 B |
+| `mt5_bars` | Broker OHLCV. Summary by default | ~600 B (summary) |
+| `mt5_positions` / `mt5_orders` | What is open right now, types decoded | varies |
+| `mt5_deals` | Closed fills. **Summary by default** — win rate, net P&L, exit reasons | ~500 B / ~15 KB paged |
+| `mt5_calendar` | Scheduled events with importance, forecast, previous, `actual` | ~2-4 KB |
+| `mt5_blackout` | **"Is it safe to act right now"** — one deterministic answer | ~600 B |
+
+Two things worth knowing before building on these:
+
+- **`mt5_deals` only shows trades that were taken.** Skipped setups leave no trace in MT5, so any journal that needs them must log signals separately.
+- **`actual` is `null` until an event is released.** That is correct, not missing data — `forecast` and `previous` are known ahead of time.
+
+Setup, routes, and the full timestamp contract: **[mt5-bridge/README.md](mt5-bridge/README.md)**.
+
 ## Context Management
 
 Tools return compact output by default to minimize context usage. For a typical "analyze my chart" workflow, total context is ~5-10KB instead of ~80KB.
@@ -339,30 +423,51 @@ The key flag: `--remote-debugging-port=9222`
 ## Testing
 
 ```bash
-# Requires TradingView running with --remote-debugging-port=9222
-npm test
+npm run test:unit                       # 190 Node tests, no TradingView needed
+python -m unittest discover mt5-bridge  # 111 Python tests, no terminal needed
+npm test                                # adds e2e — needs TradingView on port 9222
 ```
 
-29 tests covering: Pine Script static analysis, server-side compilation, and CLI routing.
+`test:unit` covers Pine Script static analysis, server-side compilation, CLI routing, chart-readiness detection, and the MT5 bridge client. The Python suite covers the bridge's pure logic — timeframe resolution, bar and deal summaries, calendar filtering, news blackout windows, broker-clock conversion — plus every route against a faked MetaTrader 5 module.
+
+Both run in CI on Node 20 and 22. Neither needs TradingView, a broker terminal, or a network.
 
 ## Architecture
 
 ```
-Claude Code  ←→  MCP Server (stdio)  ←→  CDP (port 9222)  ←→  TradingView Desktop (Electron)
+Claude Code ─┬─ MCP "tradingview" (stdio) ─→ CDP :9222 ─→ TradingView Desktop (Electron)
+             │
+             └─ MCP "mt5"        (stdio) ─→ HTTP :8765 ─→ bridge.py ─→ MetaTrader 5 terminal
+                                                              ↑
+                                          calendar_export.mq5 ┘ (writes MQL5/Files/*.json)
 ```
 
-- **Transport**: MCP over stdio (84 tools) + CLI (`tv` command, 30 commands with 66 subcommands)
-- **Connection**: Chrome DevTools Protocol on localhost:9222
+- **Transport**: MCP over stdio — 84 TradingView tools + 10 MT5 tools — plus a `tv` CLI (30 commands, 66 subcommands)
+- **Connections**: Chrome DevTools Protocol on localhost:9222; read-only HTTP bridge on localhost:8765
 - **Streaming**: Poll-and-diff loop with deduplication, JSONL output to stdout
-- **No dependencies** beyond `@modelcontextprotocol/sdk` and `chrome-remote-interface`
+- **No dependencies** beyond `@modelcontextprotocol/sdk` and `chrome-remote-interface` on the Node side, and `MetaTrader5` on the Python side
+
+### Why MT5 needs a Python bridge
+
+MetaTrader 5 has no Node binding — the official package is Python and Windows-only. And its economic calendar is reachable only from MQL5 (`CalendarValueHistory()`), not from the Python package, so a terminal-side script exports it to JSON that the bridge reads back.
+
+The bridge is **read-only by construction**: `order_send` and friends are simply absent, only `GET` is accepted, and no route maps to an order operation. Execution, if ever added, belongs in a separate process.
+
+### Timestamps
+
+MetaTrader 5 reports times against the **broker clock**, not UTC. Every MT5 timestamp is labelled twice — `time_server` (no `Z`, because it is not UTC) and `time_utc` — and consumers join on `time_utc`. Where the offset cannot be established, `time_utc` is `null` rather than a guess, and the blackout check refuses to answer rather than comparing mismatched clocks.
 
 ## Attributions
 
 This project is not affiliated with, endorsed by, or associated with:
 - **TradingView Inc.** — TradingView is a trademark of TradingView Inc.
+- **MetaQuotes Software Corp.** — MetaTrader and MetaTrader 5 are trademarks of MetaQuotes Software Corp.
+- **Any broker** — broker names and symbols appearing in documentation are examples only.
 - **Anthropic** — Claude and Claude Code are trademarks of Anthropic, PBC.
 
 This tool is an independent MCP server that connects to Claude Code via the standard MCP protocol. It does not contain or modify any Anthropic software.
+
+The TradingView portion originates from [tradesdontlie/tradingview-mcp](https://github.com/tradesdontlie/tradingview-mcp), MIT licensed. The `mt5-bridge/` subsystem and `mt5` MCP server are additions in this fork.
 
 ## Disclaimer
 
@@ -386,6 +491,14 @@ By using this software, you acknowledge and agree that:
 7. This tool accesses internal, undocumented TradingView application interfaces that may change or break at any time without notice.
 
 **Use at your own risk.** If you are unsure whether your intended use complies with TradingView's terms, do not use this tool.
+
+### Additionally, for the MT5 side
+
+8. The MT5 bridge is **read-only**. It cannot open, modify or close a position, and contains no order-placement code. Nothing in this repository trades your account.
+9. **You are solely responsible** for ensuring your use complies with your broker's terms and with the financial regulations that apply where you live. Retail leveraged forex and CFD trading is restricted or prohibited in some jurisdictions.
+10. Account data, trade history and market data read through the bridge are **your own**, obtained from a terminal you are already logged into. They remain subject to your broker's terms — do not redistribute them.
+11. **Nothing here is financial advice.** Summaries such as win rate, net P&L or news-blackout windows are arithmetic over your own data, not a recommendation to act. Historical performance does not predict future results.
+12. If you extend this project toward automated execution, note that point 4 above already excludes automated trading on TradingView-extracted data. Deriving signals from your broker's own feed, and using TradingView only for visualization, avoids that conflict.
 
 ## License
 
