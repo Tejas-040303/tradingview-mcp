@@ -47,10 +47,24 @@ Inputs let you set the history and forward windows and filter by currency
 
 Re-run it to refresh — daily is plenty, since scheduled events rarely move.
 
-### 2. Point the bridge at that file
+### 2. Point the bridge at that file — usually nothing to do
+
+The bridge finds the export by itself, searching the terminal data folder:
+
+```
+%APPDATA%\MetaQuotes\Terminal\*\MQL5\Files\mcp_calendar.json
+%APPDATA%\MetaQuotes\Terminal\Common\Files\mcp_calendar.json
+<repo>/mt5-bridge/mcp_calendar.json
+```
+
+With several terminals installed it takes the most recently exported one.
+`/calendar` reports `file_source` as `param`, `env` or `discovered`, and
+`source_file` so you can always see which file answered.
+
+Override only if the export lives somewhere unusual:
 
 ```bat
-set MT5_CALENDAR_FILE=C:\Users\<you>\AppData\Roaming\MetaQuotes\Terminal\<hash>\MQL5\Files\mcp_calendar.json
+set MT5_CALENDAR_FILE=C:\path\to\mcp_calendar.json
 ```
 
 ### 3. Start the bridge
@@ -321,7 +335,7 @@ widens sharply around news.
 python -m unittest discover -s mt5-bridge
 ```
 
-102 tests, all runnable without a terminal and gated in CI on Linux.
+111 tests, all runnable without a terminal and gated in CI on Linux.
 
 `test_normalize.py` (88) covers the pure logic: timeframe resolution, bar
 summaries, MQL5 value decoding, calendar filtering, blackout windows including
@@ -329,7 +343,7 @@ boundary cases and asymmetric windows, server-offset inference including the
 stale-weekend-tick guard, timestamp labelling, CFD price normalisation, symbol
 search, deal enum decoding, deal summaries and pagination.
 
-`test_mt5_client.py` (14) exercises every route end to end against a fake
+`test_mt5_client.py` (23) exercises every route end to end against a fake
 MetaTrader 5 module. These assert plumbing, not market behaviour — but that is
 where a shadowed variable broke `/deals` pagination once, which no amount of
 pure-function testing could have caught.

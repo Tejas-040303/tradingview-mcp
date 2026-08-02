@@ -10,6 +10,7 @@ module behind its own explicit guards.
 Requires the MetaTrader5 package, which is Windows-only:
     pip install MetaTrader5
 """
+import glob
 import json
 import os
 import time
@@ -359,6 +360,48 @@ def deals(from_ts, to_ts, symbol=None, limit=100, offset=0, summary=False):
     return out
 
 
+CALENDAR_FILENAME = 'mcp_calendar.json'
+
+
+def calendar_search_globs():
+    """
+    Where to look for the calendar dump when nothing is configured.
+
+    calendar_export.mq5 always writes into the terminal's MQL5/Files directory,
+    whose location is derivable — so requiring MT5_CALENDAR_FILE just to state
+    the obvious is a papercut, and an environment variable that must be set in
+    the same shell that launches the bridge is one that goes missing.
+    """
+    globs = []
+    appdata = os.environ.get('APPDATA')
+    if appdata:
+        terminal = os.path.join(appdata, 'MetaQuotes', 'Terminal')
+        globs.append(os.path.join(terminal, '*', 'MQL5', 'Files', CALENDAR_FILENAME))
+        globs.append(os.path.join(terminal, 'Common', 'Files', CALENDAR_FILENAME))
+    # Alongside the bridge — convenient for testing and non-Windows setups.
+    globs.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), CALENDAR_FILENAME))
+    return globs
+
+
+def discover_calendar_file(globs=None):
+    """
+    Newest calendar file across the candidate locations, or None.
+
+    Newest rather than first: a machine can have several terminal instances,
+    and the one exported most recently is the one being worked with.
+    """
+    candidates = []
+    for pattern in (globs if globs is not None else calendar_search_globs()):
+        for match in glob.glob(pattern):
+            try:
+                candidates.append((os.path.getmtime(match), match))
+            except OSError:
+                continue
+    if not candidates:
+        return None
+    return max(candidates)[1]
+
+
 def calendar(path=None):
     """
     Read the calendar dump written by calendar_export.mq5.
@@ -366,13 +409,25 @@ def calendar(path=None):
     The MetaTrader5 Python package exposes no calendar API — CalendarValueHistory
     is MQL5-only — so the terminal-side script writes JSON into MQL5/Files and
     this reads it back.
+
+    Resolution order: explicit argument, MT5_CALENDAR_FILE, then autodiscovery
+    of the terminal's MQL5/Files directory.
     """
-    path = path or os.environ.get('MT5_CALENDAR_FILE')
+    file_source = 'param'
     if not path:
+        path = os.environ.get('MT5_CALENDAR_FILE')
+        file_source = 'env' if path else None
+    if not path:
+        path = discover_calendar_file()
+        file_source = 'discovered' if path else None
+
+    if not path:
+        searched = '\n  '.join(calendar_search_globs())
         raise Mt5Error(
-            'No calendar file configured. Run calendar_export.mq5 in the '
-            'terminal, then set MT5_CALENDAR_FILE to the resulting JSON path '
-            '(usually <terminal data>/MQL5/Files/mcp_calendar.json).')
+            'No calendar file found. Run calendar_export.mq5 in the terminal '
+            '(File > Open Data Folder > MQL5/Scripts, compile with F7, run it '
+            'on any chart).\nSearched:\n  ' + searched +
+            '\nSet MT5_CALENDAR_FILE to override.')
     if not os.path.exists(path):
         raise Mt5Error(
             f'Calendar file not found: {path}. Run calendar_export.mq5 in the '
@@ -403,6 +458,7 @@ def calendar(path=None):
         'success': True,
         'count': len(normalized),
         'source_file': path,
+        'file_source': file_source,
         'exported_at': payload.get('exported_at') if is_doc else None,
         'format': payload.get('format', 1) if is_doc else 1,
         'offset_sec': file_offset,
