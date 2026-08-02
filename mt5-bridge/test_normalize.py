@@ -44,6 +44,17 @@ def event(offset_min, importance='high', currency='USD', name='CPI', **extra):
     }
 
 
+def cal(rows):
+    """
+    Normalise as if the broker clock were UTC.
+
+    Calendar times are server-clock, so a conversion is now always applied.
+    These cases are about filtering and window logic rather than clock
+    handling, so a zero offset keeps them reasoning in one clock.
+    """
+    return normalize_calendar(rows, offset_sec=0)
+
+
 class TestResolveTimeframe(unittest.TestCase):
     def test_maps_tradingview_style_strings(self):
         self.assertEqual(resolve_timeframe('5'), 'TIMEFRAME_M5')
@@ -103,35 +114,107 @@ class TestSummarizeBars(unittest.TestCase):
 
 class TestNormalizeCalendar(unittest.TestCase):
     def test_decodes_values_and_adds_iso_time(self):
-        rows = normalize_calendar([event(0, actual=3_100_000, forecast=2_900_000)])
+        rows = cal([event(0, actual=3_100_000, forecast=2_900_000)])
         self.assertEqual(rows[0]['actual'], 3.1)
         self.assertEqual(rows[0]['forecast'], 2.9)
         self.assertTrue(rows[0]['time'].endswith('Z'))
 
     def test_accepts_numeric_mql5_importance(self):
-        rows = normalize_calendar([event(0, importance=3), event(10, importance=1)])
+        rows = cal([event(0, importance=3), event(10, importance=1)])
         self.assertEqual(rows[0]['importance'], 'high')
         self.assertEqual(rows[1]['importance'], 'low')
 
     def test_unknown_importance_degrades_to_none(self):
-        self.assertEqual(normalize_calendar([event(0, importance='critical')])[0]['importance'], 'none')
+        self.assertEqual(cal([event(0, importance='critical')])[0]['importance'], 'none')
 
     def test_sorts_by_time(self):
-        rows = normalize_calendar([event(60), event(-60), event(0)])
+        rows = cal([event(60), event(-60), event(0)])
         self.assertEqual([r['timestamp'] for r in rows],
                          sorted(r['timestamp'] for r in rows))
 
     def test_skips_malformed_rows_without_losing_the_batch(self):
-        rows = normalize_calendar([{'currency': 'USD'}, event(0), {'time': 'nonsense'}])
+        rows = cal([{'currency': 'USD'}, event(0), {'time': 'nonsense'}])
         self.assertEqual(len(rows), 1)
 
     def test_tolerates_empty_input(self):
-        self.assertEqual(normalize_calendar(None), [])
+        self.assertEqual(cal(None), [])
+
+
+class TestCalendarServerClock(unittest.TestCase):
+    """
+    MQL5 reports calendar times against the broker clock, not UTC.
+
+    Rendering them with a 'Z' claimed UTC and was wrong by the server offset,
+    which shifted every blackout window by the same amount. Real releases
+    proved it: a US CPI print stamped 15:30 'UTC' is 12:30 UTC — 08:30 ET — on
+    a UTC+3 broker.
+    """
+
+    OFFSET = 10800  # UTC+3, as on XM
+
+    def test_exporter_supplied_utc_wins(self):
+        rows = normalize_calendar([{'time': NOW, 'time_utc': NOW - self.OFFSET,
+                                    'currency': 'USD', 'event': 'CPI',
+                                    'importance': 3, 'digits': 1}])
+        self.assertEqual(rows[0]['time_utc'], NOW - self.OFFSET)
+        self.assertEqual(rows[0]['timestamp'], NOW - self.OFFSET)
+
+    def test_falls_back_to_the_live_offset_for_old_files(self):
+        rows = normalize_calendar([event(0)], offset_sec=self.OFFSET)
+        self.assertEqual(rows[0]['time_utc'], NOW - self.OFFSET)
+
+    def test_unknown_offset_yields_no_utc_rather_than_a_false_z(self):
+        rows = normalize_calendar([event(0)])
+        self.assertIsNone(rows[0]['time_utc'])
+        self.assertIsNone(rows[0]['time_utc_iso'])
+        self.assertIsNone(rows[0]['timestamp'])
+
+    def test_server_time_is_always_kept_and_never_labelled_utc(self):
+        rows = normalize_calendar([event(0)])
+        self.assertEqual(rows[0]['time_server'], NOW)
+        self.assertFalse(rows[0]['time_server_iso'].endswith('Z'))
+
+    def test_the_three_hour_shift_is_gone(self):
+        # A release the broker stamps 15:30 is 12:30 UTC on a UTC+3 server.
+        stamped = normalize_calendar(
+            [{'time': NOW, 'currency': 'USD', 'event': 'CPI', 'importance': 3}],
+            offset_sec=self.OFFSET)[0]
+        gap = (stamped['time_server'] - stamped['time_utc']) / 3600
+        self.assertEqual(gap, 3)
+
+    def test_ordering_survives_an_unknown_offset(self):
+        rows = normalize_calendar([event(60), event(-60), event(0)])
+        self.assertEqual([r['time_server'] for r in rows],
+                         sorted(r['time_server'] for r in rows))
+
+
+class TestBlackoutRefusesWhenUnresolvable(unittest.TestCase):
+    """A safety gate must refuse rather than guess."""
+
+    def test_refuses_when_events_have_no_utc_timestamp(self):
+        out = blackout_status(normalize_calendar([event(5)]), NOW)
+        self.assertEqual(out['success'], False)
+        self.assertIsNone(out['blackout'])
+        self.assertIn('no UTC timestamp', out['error'])
+        self.assertIn('calendar_export.mq5', out['hint'])
+
+    def test_evaluates_normally_once_the_offset_is_known(self):
+        rows = normalize_calendar([event(5)], offset_sec=10800)
+        # now must be on the same UTC clock the events were converted to.
+        out = blackout_status(rows, NOW - 10800)
+        self.assertTrue(out['success'])
+        self.assertTrue(out['blackout'])
+
+    def test_unresolvable_events_outside_the_filter_do_not_block(self):
+        rows = normalize_calendar([event(5, currency='JPY')])
+        out = blackout_status(rows, NOW, currencies=['USD'])
+        self.assertTrue(out['success'])
+        self.assertFalse(out['blackout'])
 
 
 class TestFilterCalendar(unittest.TestCase):
     def setUp(self):
-        self.rows = normalize_calendar([
+        self.rows = cal([
             event(10, importance='high', currency='USD', name='CPI'),
             event(20, importance='low', currency='USD', name='Truck Sales'),
             event(30, importance='high', currency='EUR', name='ECB Rate'),
@@ -153,7 +236,7 @@ class TestFilterCalendar(unittest.TestCase):
         # The /calendar default. Anything stricter silently drops the events
         # the terminal rates 'none', which is how an export of 1000 came back
         # as 987.
-        rows = normalize_calendar([event(5, importance='none'),
+        rows = cal([event(5, importance='none'),
                                    event(10, importance='high')])
         self.assertEqual(len(filter_calendar(rows, min_importance='none')), 2)
         self.assertEqual(len(filter_calendar(rows, min_importance='low')), 1)
@@ -163,49 +246,49 @@ class TestBlackoutStatus(unittest.TestCase):
     """The ±15m rule an automated strategy consults before acting."""
 
     def test_pending_release_inside_window_blacks_out(self):
-        out = blackout_status(normalize_calendar([event(10)]), NOW)
+        out = blackout_status(cal([event(10)]), NOW)
         self.assertTrue(out['blackout'])
         self.assertEqual(out['active'][0]['minutes_until'], 10.0)
 
     def test_recent_release_inside_window_blacks_out(self):
-        out = blackout_status(normalize_calendar([event(-10)]), NOW)
+        out = blackout_status(cal([event(-10)]), NOW)
         self.assertTrue(out['blackout'])
         self.assertEqual(out['active'][0]['minutes_until'], -10.0)
 
     def test_window_boundaries_are_inclusive(self):
-        self.assertTrue(blackout_status(normalize_calendar([event(15)]), NOW)['blackout'])
-        self.assertTrue(blackout_status(normalize_calendar([event(-15)]), NOW)['blackout'])
+        self.assertTrue(blackout_status(cal([event(15)]), NOW)['blackout'])
+        self.assertTrue(blackout_status(cal([event(-15)]), NOW)['blackout'])
 
     def test_outside_window_is_clear(self):
-        out = blackout_status(normalize_calendar([event(16)]), NOW)
+        out = blackout_status(cal([event(16)]), NOW)
         self.assertFalse(out['blackout'])
         self.assertEqual(out['minutes_until_next'], 16.0)
 
     def test_asymmetric_windows_are_honoured(self):
-        rows = normalize_calendar([event(-25)])
+        rows = cal([event(-25)])
         self.assertFalse(blackout_status(rows, NOW, after_min=15)['blackout'])
         self.assertTrue(blackout_status(rows, NOW, after_min=30)['blackout'])
 
     def test_low_importance_event_does_not_block_by_default(self):
-        out = blackout_status(normalize_calendar([event(5, importance='low')]), NOW)
+        out = blackout_status(cal([event(5, importance='low')]), NOW)
         self.assertFalse(out['blackout'])
 
     def test_importance_floor_can_be_lowered(self):
-        rows = normalize_calendar([event(5, importance='moderate')])
+        rows = cal([event(5, importance='moderate')])
         self.assertTrue(blackout_status(rows, NOW, min_importance='moderate')['blackout'])
 
     def test_currency_filter_excludes_unrelated_events(self):
-        rows = normalize_calendar([event(5, currency='JPY')])
+        rows = cal([event(5, currency='JPY')])
         self.assertFalse(blackout_status(rows, NOW, currencies=['USD'])['blackout'])
         self.assertTrue(blackout_status(rows, NOW, currencies=['JPY'])['blackout'])
 
     def test_binding_constraint_is_reported_first(self):
-        rows = normalize_calendar([event(14, name='Far'), event(2, name='Near')])
+        rows = cal([event(14, name='Far'), event(2, name='Near')])
         out = blackout_status(rows, NOW)
         self.assertEqual(out['active'][0]['event'], 'Near')
 
     def test_next_event_skips_ones_already_past(self):
-        rows = normalize_calendar([event(-600, name='Old'), event(600, name='Future')])
+        rows = cal([event(-600, name='Old'), event(600, name='Future')])
         out = blackout_status(rows, NOW)
         self.assertFalse(out['blackout'])
         self.assertEqual(out['next']['event'], 'Future')
@@ -217,7 +300,7 @@ class TestBlackoutStatus(unittest.TestCase):
         self.assertIsNone(out['minutes_until_next'])
 
     def test_echoes_the_settings_it_applied(self):
-        out = blackout_status(normalize_calendar([event(5)]), NOW,
+        out = blackout_status(cal([event(5)]), NOW,
                               before_min=30, after_min=45, currencies=['usd'])
         self.assertEqual(out['window'], {'before_min': 30, 'after_min': 45})
         self.assertEqual(out['currencies'], ['USD'])

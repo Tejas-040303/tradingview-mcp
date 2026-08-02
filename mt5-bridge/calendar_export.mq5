@@ -84,6 +84,15 @@ void OnStart()
         }
      }
 
+   // MQL5 reports calendar event times against the SERVER clock, not UTC.
+   // The terminal knows its own offset, so resolve it here and write real UTC
+   // into the file — that way the bridge never has to guess, and the calendar
+   // keeps working on a weekend when no ticks are arriving to infer it from.
+   int offsetSec = (int)(TimeCurrent() - TimeGMT());
+   // Snap to the nearest half hour: TimeCurrent() and TimeGMT() are read a
+   // moment apart and real offsets are whole or half hours.
+   offsetSec = (int)(MathRound(offsetSec / 1800.0) * 1800);
+
    datetime from = TimeCurrent() - (datetime)DaysBack  * 86400;
    datetime to   = TimeCurrent() + (datetime)DaysAhead * 86400;
 
@@ -107,6 +116,8 @@ void OnStart()
    FileWriteString(handle, "{\n");
    FileWriteString(handle, "  \"exported_at\": \"" +
                    TimeToString(TimeGMT(), TIME_DATE | TIME_SECONDS) + "\",\n");
+   FileWriteString(handle, "  \"format\": 2,\n");
+   FileWriteString(handle, "  \"offset_sec\": " + IntegerToString(offsetSec) + ",\n");
    FileWriteString(handle, "  \"events\": [\n");
 
    int written = 0;
@@ -132,10 +143,11 @@ void OnStart()
          FileWriteString(handle, ",\n");
 
       string row = StringFormat(
-         "    {\"time\": %d, \"currency\": \"%s\", \"country\": \"%s\", "
+         "    {\"time\": %d, \"time_utc\": %d, \"currency\": \"%s\", \"country\": \"%s\", "
          "\"event\": \"%s\", \"importance\": %d, \"digits\": %d, \"unit\": \"%s\", "
          "\"actual\": %s, \"forecast\": %s, \"previous\": %s}",
          (long)values[i].time,
+         (long)values[i].time - offsetSec,
          JsonEscape(currency),
          JsonEscape(countryName),
          JsonEscape(event.name),
@@ -155,6 +167,11 @@ void OnStart()
 
    Print("calendar_export: wrote ", written, " events to MQL5/Files/", OutFile,
          " (window ", TimeToString(from, TIME_DATE), " .. ",
-         TimeToString(to, TIME_DATE), ")");
+         TimeToString(to, TIME_DATE),
+         ", server offset ", offsetSec, "s from UTC)");
+   if(DaysBack > 200)
+      Print("calendar_export: note — the offset written is the CURRENT one. ",
+            "Events on the far side of a daylight-saving change may be off by ",
+            "an hour. Re-export regularly rather than relying on one long pull.");
   }
 //+------------------------------------------------------------------+

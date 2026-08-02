@@ -381,12 +381,31 @@ def calendar(path=None):
     with open(path, 'r', encoding='utf-8') as handle:
         payload = json.load(handle)
 
-    rows = payload.get('events', payload) if isinstance(payload, dict) else payload
-    normalized = normalize_calendar(rows)
+    is_doc = isinstance(payload, dict)
+    rows = payload.get('events', payload) if is_doc else payload
+
+    # Event times are broker-clock. Resolve them to UTC using, in order: the
+    # offset the exporter recorded (authoritative — the terminal knows its own
+    # clock, and it works on a weekend when nothing can be inferred), then the
+    # live offset for files written before the format carried it.
+    file_offset = payload.get('offset_sec') if is_doc else None
+    if file_offset is None:
+        try:
+            file_offset = server_utc_offset()['offset_sec']
+            offset_source = 'live' if file_offset is not None else 'unknown'
+        except Mt5Error:
+            file_offset, offset_source = None, 'unknown'
+    else:
+        offset_source = 'file'
+
+    normalized = normalize_calendar(rows, offset_sec=file_offset)
     return {
         'success': True,
         'count': len(normalized),
         'source_file': path,
-        'exported_at': payload.get('exported_at') if isinstance(payload, dict) else None,
+        'exported_at': payload.get('exported_at') if is_doc else None,
+        'format': payload.get('format', 1) if is_doc else 1,
+        'offset_sec': file_offset,
+        'offset_source': offset_source,
         'events': normalized,
     }

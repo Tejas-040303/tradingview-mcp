@@ -107,6 +107,12 @@ bridge on 8765, and neither should fail because the other is closed.
   `actual` once released. `actual` is null until an event happens — correct, not
   missing. Defaults to high importance; unfiltered runs to hundreds of rows.
 
+Calendar events carry `time_server_iso` and `time_utc_iso` like every other MT5
+timestamp — MQL5 reports them on the broker clock, and the exporter resolves
+them to UTC. If `mt5_blackout` returns `success: false` with `blackout: null`,
+the calendar file predates that conversion and the offset is unknown; re-run
+`calendar_export.mq5`. It refuses rather than comparing mismatched clocks.
+
 ### "How did my trading go?"
 - `mt5_deals` → summary by default: win rate, net P&L, exit reasons
   (`stop_loss` / `take_profit` / `mobile` / …). Pass `summary: false` with
