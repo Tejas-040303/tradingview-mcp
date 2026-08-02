@@ -245,15 +245,21 @@ widens sharply around news.
 python -m unittest discover -s mt5-bridge
 ```
 
-78 tests over `normalize.py` — timeframe resolution, bar summaries, MQL5 value
-decoding, calendar filtering, blackout windows including boundary cases and
-asymmetric windows, server-offset inference including the stale-weekend-tick
-guard, timestamp labelling, CFD price normalisation, symbol search, deal enum
-decoding, deal summaries and pagination. These need no terminal and run in CI
-on Linux.
+92 tests, all runnable without a terminal and gated in CI on Linux.
 
-`mt5_client.py` needs Windows and a live terminal, so it is **not** covered.
-Verify it manually with the `curl` calls above.
+`test_normalize.py` (78) covers the pure logic: timeframe resolution, bar
+summaries, MQL5 value decoding, calendar filtering, blackout windows including
+boundary cases and asymmetric windows, server-offset inference including the
+stale-weekend-tick guard, timestamp labelling, CFD price normalisation, symbol
+search, deal enum decoding, deal summaries and pagination.
+
+`test_mt5_client.py` (14) exercises every route end to end against a fake
+MetaTrader 5 module. These assert plumbing, not market behaviour — but that is
+where a shadowed variable broke `/deals` pagination once, which no amount of
+pure-function testing could have caught.
+
+Real terminal behaviour is still unverified by CI. Check it with the `curl`
+calls above.
 
 ## Not here yet
 

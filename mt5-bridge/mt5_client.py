@@ -321,13 +321,14 @@ def deals(from_ts, to_ts, symbol=None, limit=100, offset=0, summary=False):
     """
     mt5 = _mt5_module()
     connect()
-    offset = server_utc_offset()
+    # Named `clock`, not `offset` — `offset` is the pagination parameter.
+    clock = server_utc_offset()
 
     # history_deals_get interprets its bounds in *server* time, so a UTC window
     # has to be shifted before querying or the range is wrong by the offset —
     # three hours on a UTC+3 broker, quietly dropping or adding trades at the
     # edges. With an unknown offset the bounds are passed through as given.
-    shift = offset['offset_sec'] or 0
+    shift = clock['offset_sec'] or 0
     start = datetime.fromtimestamp(int(from_ts) + shift, tz=timezone.utc)
     end = datetime.fromtimestamp(int(to_ts) + shift, tz=timezone.utc)
 
@@ -337,14 +338,14 @@ def deals(from_ts, to_ts, symbol=None, limit=100, offset=0, summary=False):
     for row in rows:
         decode_enums(row, {'type': DEAL_TYPE, 'entry': DEAL_ENTRY,
                            'reason': DEAL_REASON})
-        row.update(time_fields(row.pop('time', None), offset['offset_sec']))
-        row.update(msc_fields(row.pop('time_msc', None), offset['offset_sec']))
+        row.update(time_fields(row.pop('time', None), clock['offset_sec']))
+        row.update(msc_fields(row.pop('time_msc', None), clock['offset_sec']))
 
     out = {
         'success': True,
         'requested_window_utc': {'from': int(from_ts), 'to': int(to_ts)},
-        'server_utc_offset_sec': offset['offset_sec'],
-        'server_utc_offset_source': offset['source'],
+        'server_utc_offset_sec': clock['offset_sec'],
+        'server_utc_offset_source': clock['source'],
         # Summary is computed over the whole window, not just the page.
         'summary': summarize_deals(rows),
     }
