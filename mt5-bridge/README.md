@@ -295,9 +295,38 @@ pure-function testing could have caught.
 Real terminal behaviour is still unverified by CI. Check it with the `curl`
 calls above.
 
+## Using it from Claude Code
+
+The bridge is HTTP, so it works with `curl` alone — but the `mt5` MCP server
+(`src/mt5-server.js`) exposes the same routes as 10 tools Claude can call
+directly. Register it alongside the TradingView server:
+
+```json
+{
+  "mcpServers": {
+    "tradingview": { "command": "node", "args": ["<path>/src/server.js"] },
+    "mt5":         { "command": "node", "args": ["<path>/src/mt5-server.js"] }
+  }
+}
+```
+
+Two servers rather than one, deliberately: the TradingView tools need Desktop
+running on CDP, these need the bridge on 8765, and closing one should not take
+the other down.
+
+Optional environment for the MCP server:
+
+```
+MT5_BRIDGE_URL      default http://127.0.0.1:8765
+MT5_BRIDGE_TOKEN    must match MT5_BRIDGE_TOKEN on the bridge
+MT5_BRIDGE_TIMEOUT  default 15000 ms
+```
+
+Restart Claude Code after editing the config, keep `bridge.py` running, then ask
+it to run `mt5_health`. Symbol encoding is handled for you — pass `GOLD.i#`, not
+`GOLD.i%23`.
+
 ## Not here yet
 
-- Node MCP tool layer — comes next, once the response shapes are confirmed
-  against a real terminal
 - Any execution path
 - The signal scanner and trade journal

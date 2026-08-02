@@ -84,6 +84,67 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 - `tv_launch` → auto-detect and launch TradingView with CDP on Mac/Win/Linux
 - `tv_health_check` → verify connection is working
 
+## MT5 Broker Data (separate MCP server)
+
+A second MCP server — `mt5`, 10 read-only tools — exposes a MetaTrader 5 terminal
+via the local Python bridge (`mt5-bridge/bridge.py`). It is a **different
+process** from this one: TradingView tools need CDP on 9222, MT5 tools need the
+bridge on 8765, and neither should fail because the other is closed.
+
+**Read-only.** No tool there can open, modify or close a position.
+
+### "What's my broker account doing?"
+1. `mt5_health` → bridge + terminal state, account identity, broker clock offset
+2. `mt5_account` → balance, equity, margin, leverage
+3. `mt5_positions` / `mt5_orders` → what is open right now
+
+### "Is it safe to trade right now?"
+- `mt5_blackout` → one deterministic answer, with the events causing it and the
+  next one due. Check before acting on any signal.
+
+### "What's coming up on the calendar?"
+- `mt5_calendar` → scheduled events with importance, forecast, previous, and
+  `actual` once released. `actual` is null until an event happens — correct, not
+  missing. Defaults to high importance; unfiltered runs to hundreds of rows.
+
+### "How did my trading go?"
+- `mt5_deals` → summary by default: win rate, net P&L, exit reasons
+  (`stop_loss` / `take_profit` / `mobile` / …). Pass `summary: false` with
+  `limit`/`offset` to page through individual fills.
+- **Only shows trades that were TAKEN.** Skipped setups leave no trace in MT5,
+  so any journal that needs them must log signals separately.
+
+### Comparing TradingView against the broker
+The same instrument has different names in each system — `FX:XAUUSD` on
+TradingView, `GOLD.i#` on XM. Use `mt5_symbol_search` to find the broker's name;
+never assume `XAUUSD` exists.
+
+Useful combinations: read levels from the chart with `data_get_pine_lines`, then
+check where fills actually landed with `mt5_deals`; or mark real entries on the
+chart by feeding `mt5_deals` prices into `draw_shape`.
+
+### Timestamps — read before joining anything
+MetaTrader 5 reports times against the **broker clock**, not UTC. Every MT5
+timestamp is labelled twice: `time_server` / `time_server_iso` (no `Z`, because
+it is not UTC) and `time_utc` / `time_utc_iso`. **Always join on `time_utc`** —
+the calendar is UTC, and mixing the two misaligns everything by the broker
+offset (3 hours on XM) while looking perfectly reasonable. If the offset is
+unknown, `time_utc` is null rather than a guess.
+
+### MT5 output sizes
+| Tool | Typical Output |
+|------|---------------|
+| `mt5_health` / `mt5_account` | ~300 bytes |
+| `mt5_quote` | ~250 bytes |
+| `mt5_blackout` | ~600 bytes |
+| `mt5_bars` (summary) | ~600 bytes |
+| `mt5_deals` (summary) | ~500 bytes |
+| `mt5_calendar` (high, one currency) | ~2-4 KB |
+| `mt5_deals` (50 rows) | ~15 KB |
+
+If an MT5 tool reports the bridge is unreachable, the bridge is not running:
+`python mt5-bridge/bridge.py`
+
 ## Context Management Rules
 
 These tools can return large payloads. Follow these rules to avoid context bloat:
