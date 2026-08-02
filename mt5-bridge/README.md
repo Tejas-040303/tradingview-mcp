@@ -140,6 +140,48 @@ in the loop:
 landed. An event blacks out from `before_min` ahead of it to `after_min` after.
 Defaults to high-importance events only; pass `min_importance=moderate` to widen.
 
+### Calendar times are server-clock at the source
+
+MQL5 reports calendar event times against the **broker clock**, not UTC — the
+same trap as bars and ticks. A US CPI print stamped `15:30` by a UTC+3 broker is
+`12:30` UTC, which is 08:30 ET.
+
+`calendar_export.mq5` resolves this at the source: it computes the offset with
+`TimeCurrent() - TimeGMT()` and writes both `time` (server) and `time_utc` into
+the file, plus `offset_sec` in the header. The terminal knows its own clock, so
+the calendar is self-describing and needs no live offset to interpret — which
+matters on a weekend, when no ticks are arriving to infer one from.
+
+`/calendar` returns both, and `/blackout` compares on UTC:
+
+```json
+{
+  "time_server_iso": "2026-08-12T15:30:00",
+  "time_utc_iso":    "2026-08-12T12:30:00Z"
+}
+```
+
+Files exported before this (`format: 1`, no `time_utc`) still work — the bridge
+converts them with the live offset, and `/calendar` reports
+`offset_source: "live"` instead of `"file"`. If the offset is unknown too,
+`time_utc` is null and **`/blackout` refuses to answer** rather than comparing
+mismatched clocks:
+
+```json
+{"success": false, "blackout": null,
+ "error": "Cannot evaluate: 2 of 2 matching events have no UTC timestamp...",
+ "hint": "Re-run calendar_export.mq5 to write time_utc, or set MT5_SERVER_UTC_OFFSET_SEC"}
+```
+
+A gate that guesses is worse than one that refuses — it would report "clear"
+during a release and "blocked" hours afterwards, and be trusted either way.
+
+> **Daylight saving:** the exporter writes the offset in force *at export time*.
+> Events on the far side of a DST change (brokers on EET/EEST shift in late
+> March and late October) can be an hour out. Blackout checks are unaffected —
+> they only look at events near now. For a long historical pull, re-export
+> regularly and accumulate rather than relying on one year-long export.
+
 ### Reading the calendar
 
 `/calendar` returns everything unless you filter it. `min_importance` defaults
@@ -279,9 +321,9 @@ widens sharply around news.
 python -m unittest discover -s mt5-bridge
 ```
 
-92 tests, all runnable without a terminal and gated in CI on Linux.
+102 tests, all runnable without a terminal and gated in CI on Linux.
 
-`test_normalize.py` (78) covers the pure logic: timeframe resolution, bar
+`test_normalize.py` (88) covers the pure logic: timeframe resolution, bar
 summaries, MQL5 value decoding, calendar filtering, blackout windows including
 boundary cases and asymmetric windows, server-offset inference including the
 stale-weekend-tick guard, timestamp labelling, CFD price normalisation, symbol

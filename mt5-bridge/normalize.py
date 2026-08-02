@@ -354,20 +354,39 @@ def scaled(value, digits=0):
     return round(out, digits) if digits else out
 
 
-def normalize_calendar(rows):
+def normalize_calendar(rows, offset_sec=None):
     """
     Normalise exported calendar rows into a stable shape, sorted by time.
 
-    Accepts rows as written by calendar_export.mq5. Unparseable rows are
-    skipped rather than aborting the batch — a single malformed event should
-    not blind the blackout check.
+    MQL5 reports calendar event times against the **broker clock**, not UTC.
+    Rendering them with a 'Z' claimed UTC and was wrong by the server offset —
+    three hours on a UTC+3 broker — which shifted every blackout window by the
+    same amount. Timestamps are now resolved to real UTC:
+
+      1. `time_utc` written by the exporter, if present — authoritative,
+         since the terminal knows its own offset
+      2. otherwise `time` (server) minus `offset_sec`, for files exported
+         before the format carried it
+      3. otherwise unknown — reported as None rather than guessed
+
+    `timestamp` is always UTC epoch or None, because that is what any
+    comparison against wall-clock time needs.
     """
     out = []
     for row in rows or []:
         try:
-            ts = int(row['time'])
+            ts_server = int(row['time'])
         except (KeyError, TypeError, ValueError):
             continue
+
+        ts_utc = None
+        if row.get('time_utc') is not None:
+            try:
+                ts_utc = int(row['time_utc'])
+            except (TypeError, ValueError):
+                ts_utc = None
+        if ts_utc is None and offset_sec is not None:
+            ts_utc = ts_server - int(offset_sec)
 
         importance = row.get('importance')
         if isinstance(importance, int):
@@ -378,8 +397,12 @@ def normalize_calendar(rows):
 
         digits = int(row.get('digits') or 0)
         out.append({
-            'timestamp': ts,
-            'time': iso(ts),
+            'timestamp': ts_utc,
+            'time': iso(ts_utc) if ts_utc is not None else None,
+            'time_server': ts_server,
+            'time_server_iso': iso_naive(ts_server),
+            'time_utc': ts_utc,
+            'time_utc_iso': iso(ts_utc) if ts_utc is not None else None,
             'currency': str(row.get('currency') or '').upper(),
             'country': row.get('country') or '',
             'event': row.get('event') or '',
@@ -390,7 +413,9 @@ def normalize_calendar(rows):
             'unit': row.get('unit') or '',
         })
 
-    out.sort(key=lambda r: r['timestamp'])
+    # Sort on whichever clock is available; server time preserves ordering even
+    # when the UTC conversion is unknown.
+    out.sort(key=lambda r: r['timestamp'] if r['timestamp'] is not None else r['time_server'])
     return out
 
 
@@ -406,10 +431,14 @@ def filter_calendar(rows, currencies=None, min_importance='low',
             continue
         if wanted and row['currency'] not in wanted:
             continue
-        if from_ts is not None and row['timestamp'] < from_ts:
-            continue
-        if to_ts is not None and row['timestamp'] > to_ts:
-            continue
+        # A time window can only be applied to a resolved UTC timestamp.
+        if from_ts is not None or to_ts is not None:
+            if row['timestamp'] is None:
+                continue
+            if from_ts is not None and row['timestamp'] < from_ts:
+                continue
+            if to_ts is not None and row['timestamp'] > to_ts:
+                continue
         kept.append(row)
     return kept
 
@@ -429,6 +458,24 @@ def blackout_status(rows, now_ts, before_min=15, after_min=15,
     matching = filter_calendar(rows, currencies=currencies,
                                min_importance=min_importance)
 
+    # A gate that cannot resolve event times to UTC must refuse, not guess.
+    # Comparing broker-clock timestamps against wall-clock UTC would report
+    # "clear" during a release and "blocked" hours afterwards — worse than no
+    # gate, because it would be trusted.
+    unresolved = [r for r in matching if r['timestamp'] is None]
+    if unresolved:
+        return {
+            'success': False,
+            'blackout': None,
+            'error': (
+                f'Cannot evaluate: {len(unresolved)} of {len(matching)} matching '
+                'events have no UTC timestamp. The calendar file predates the '
+                'time_utc field and the broker clock offset is unknown.'),
+            'hint': (
+                'Re-run calendar_export.mq5 to write time_utc, or set '
+                'MT5_SERVER_UTC_OFFSET_SEC on the bridge.'),
+        }
+
     active, upcoming = [], []
     for row in matching:
         minutes_until = (row['timestamp'] - now_ts) / 60.0
@@ -443,6 +490,7 @@ def blackout_status(rows, now_ts, before_min=15, after_min=15,
     upcoming.sort(key=lambda r: r['minutes_until'])
 
     return {
+        'success': True,
         'blackout': bool(active),
         'now': iso(now_ts),
         'window': {'before_min': abs(before_min), 'after_min': abs(after_min)},
