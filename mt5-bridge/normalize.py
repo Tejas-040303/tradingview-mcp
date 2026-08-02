@@ -30,6 +30,31 @@ TIMEFRAMES = {
 
 IMPORTANCE_RANK = {'none': 0, 'low': 1, 'moderate': 2, 'high': 3}
 
+# MetaTrader 5 reports these as bare integers. A journal full of `"reason": 4`
+# is unreadable, and the mapping is not guessable from the value.
+DEAL_TYPE = {
+    0: 'buy', 1: 'sell', 2: 'balance', 3: 'credit', 4: 'charge',
+    5: 'correction', 6: 'bonus', 7: 'commission', 8: 'commission_daily',
+    9: 'commission_monthly', 10: 'commission_agent_daily',
+    11: 'commission_agent_monthly', 12: 'interest', 13: 'buy_canceled',
+    14: 'sell_canceled', 15: 'dividend', 16: 'dividend_franked', 17: 'tax',
+}
+DEAL_ENTRY = {0: 'in', 1: 'out', 2: 'inout', 3: 'out_by'}
+DEAL_REASON = {
+    0: 'client', 1: 'mobile', 2: 'web', 3: 'expert', 4: 'stop_loss',
+    5: 'take_profit', 6: 'stop_out', 7: 'rollover', 8: 'variation_margin',
+    9: 'split',
+}
+ORDER_TYPE = {
+    0: 'buy', 1: 'sell', 2: 'buy_limit', 3: 'sell_limit', 4: 'buy_stop',
+    5: 'sell_stop', 6: 'buy_stop_limit', 7: 'sell_stop_limit', 8: 'close_by',
+}
+POSITION_TYPE = {0: 'buy', 1: 'sell'}
+
+# Deals that closed exposure carry the realised P&L; the rest are entries or
+# non-trade bookkeeping.
+CLOSING_ENTRIES = ('out', 'out_by', 'inout')
+
 # MQL5 ENUM_CALENDAR_EVENT_IMPORTANCE ordinals.
 MQL_IMPORTANCE = {0: 'none', 1: 'low', 2: 'moderate', 3: 'high'}
 
@@ -112,6 +137,108 @@ def time_fields(ts, offset_sec):
         out['time_utc'] = utc
         out['time_utc_iso'] = iso(utc)
     return out
+
+
+def msc_fields(msc, offset_sec):
+    """
+    Expand a millisecond timestamp the same way time_fields does.
+
+    MetaTrader 5's time_msc is server-clock milliseconds. Sitting unconverted
+    next to labelled second-resolution fields it is the same trap all over
+    again — and it matters because it is the only field that orders deals
+    within the same second.
+    """
+    if not msc:
+        return {}
+    out = {'time_msc_server': int(msc)}
+    out['time_msc_utc'] = None if offset_sec is None else int(msc) - int(offset_sec) * 1000
+    return out
+
+
+def decode_enums(row, mapping_by_field):
+    """
+    Replace integer enum fields with readable names, keeping the raw value.
+
+    Unknown codes are passed through as 'unknown_<n>' rather than dropped, so a
+    new MetaTrader build cannot silently erase information.
+    """
+    for field, mapping in mapping_by_field.items():
+        if field not in row:
+            continue
+        raw = row[field]
+        if not isinstance(raw, int):
+            continue
+        row[f'{field}_raw'] = raw
+        row[field] = mapping.get(raw, f'unknown_{raw}')
+    return row
+
+
+def summarize_deals(deals):
+    """
+    Journal-shaped summary of a deal history.
+
+    A month of scalping is hundreds of deals — far too much to hand back in
+    full. Realised P&L lives on the closing deals; entries carry none, and
+    balance/credit rows are not trades at all, so both are excluded from the
+    win/loss counts.
+    """
+    if not deals:
+        return None
+
+    closing = [d for d in deals
+               if str(d.get('entry')) in CLOSING_ENTRIES
+               and str(d.get('type')) in ('buy', 'sell')]
+
+    profits = [d.get('profit') or 0 for d in closing]
+    wins = [p for p in profits if p > 0]
+    losses = [p for p in profits if p < 0]
+
+    gross = sum(profits)
+    costs = sum((d.get('commission') or 0) + (d.get('swap') or 0) + (d.get('fee') or 0)
+                for d in deals)
+
+    reasons = {}
+    for deal in closing:
+        key = str(deal.get('reason', 'unknown'))
+        reasons[key] = reasons.get(key, 0) + 1
+
+    symbols = sorted({d.get('symbol') for d in deals if d.get('symbol')})
+    stamps = [d.get('time_utc') for d in deals if d.get('time_utc')]
+
+    return {
+        'deals': len(deals),
+        'closed_trades': len(closing),
+        'symbols': symbols,
+        'from_utc': iso(min(stamps)) if stamps else None,
+        'to_utc': iso(max(stamps)) if stamps else None,
+        'wins': len(wins),
+        'losses': len(losses),
+        'win_rate_pct': round(len(wins) / len(closing) * 100, 1) if closing else None,
+        'gross_profit': round(gross, 2),
+        'costs': round(costs, 2),
+        'net_profit': round(gross + costs, 2),
+        'best': round(max(profits), 2) if profits else None,
+        'worst': round(min(profits), 2) if profits else None,
+        'avg_win': round(sum(wins) / len(wins), 2) if wins else None,
+        'avg_loss': round(sum(losses) / len(losses), 2) if losses else None,
+        'volume': round(sum(d.get('volume') or 0 for d in closing), 2),
+        'closed_by': reasons,
+    }
+
+
+def paginate(rows, limit=100, offset=0):
+    """Slice a result set and report whether more remains."""
+    total = len(rows)
+    offset = max(0, int(offset))
+    limit = max(1, int(limit))
+    window = rows[offset:offset + limit]
+    return window, {
+        'total': total,
+        'returned': len(window),
+        'offset': offset,
+        'limit': limit,
+        'has_more': offset + len(window) < total,
+    }
 
 
 def mid_price(bid, ask, digits=None):

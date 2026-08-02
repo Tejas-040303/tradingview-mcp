@@ -88,6 +88,9 @@ def route(path, params):
             from_ts=int(_one(params, 'from', now - 30 * 86400)),
             to_ts=int(_one(params, 'to', now)),
             symbol=_one(params, 'symbol'),
+            limit=int(_one(params, 'limit', 100)),
+            offset=int(_one(params, 'offset', 0)),
+            summary=_truthy(_one(params, 'summary', '')),
         )
 
     if path == '/calendar':
