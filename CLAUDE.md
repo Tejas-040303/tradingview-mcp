@@ -151,6 +151,10 @@ unknown, `time_utc` is null rather than a guess.
 If an MT5 tool reports the bridge is unreachable, the bridge is not running:
 `python mt5-bridge/bridge.py`
 
+The bridge finds the calendar export itself under the terminal data folder, so
+`MT5_CALENDAR_FILE` is only needed for a non-standard location. If no export is
+found the error lists every path it searched.
+
 ## Context Management Rules
 
 These tools can return large payloads. Follow these rules to avoid context bloat:

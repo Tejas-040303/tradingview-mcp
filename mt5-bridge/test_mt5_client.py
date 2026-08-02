@@ -9,8 +9,12 @@ tests could not catch it — the wiring is where it broke.
 These exercise each route end to end with the terminal faked out, so they run
 anywhere. They assert plumbing, not market behaviour.
 """
+import json
 import os
+import tempfile
+import time as _time
 import unittest
+from pathlib import Path
 
 import mt5_client
 
@@ -199,6 +203,106 @@ class TestOtherRoutes(ClientTestCase):
         row = mt5_client.orders()['orders'][0]
         self.assertEqual(row['type'], 'buy_limit')
         self.assertEqual(row['time_utc'], NOW - OFFSET)
+
+
+class TestCalendarDiscovery(unittest.TestCase):
+    """
+    The calendar file lives in a derivable place, so requiring an env var to
+    name it is a papercut — and one that must be set in the same shell that
+    launches the bridge is an env var that goes missing.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        os.environ.pop('MT5_CALENDAR_FILE', None)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+        os.environ.pop('MT5_CALENDAR_FILE', None)
+
+    def _terminal(self, name, events=(), mtime=None):
+        """Create a fake terminal instance holding a calendar export."""
+        path = self.root / name / 'MQL5' / 'Files' / mt5_client.CALENDAR_FILENAME
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps({'format': 2, 'offset_sec': OFFSET,
+                                    'events': list(events)}))
+        if mtime is not None:
+            os.utime(path, (mtime, mtime))
+        return path
+
+    def _globs(self):
+        return [str(self.root / '*' / 'MQL5' / 'Files' / mt5_client.CALENDAR_FILENAME)]
+
+    def test_finds_a_single_terminal_export(self):
+        made = self._terminal('ABC123')
+        found = mt5_client.discover_calendar_file(self._globs())
+        self.assertEqual(Path(found), made)
+
+    def test_prefers_the_most_recently_exported(self):
+        now = _time.time()
+        self._terminal('OLD', mtime=now - 86400)
+        newest = self._terminal('NEW', mtime=now)
+        self.assertEqual(Path(mt5_client.discover_calendar_file(self._globs())), newest)
+
+    def test_returns_none_when_nothing_is_exported(self):
+        self.assertIsNone(mt5_client.discover_calendar_file(self._globs()))
+
+    def test_search_globs_cover_the_terminal_data_folder(self):
+        os.environ['APPDATA'] = str(self.root)
+        try:
+            globs = mt5_client.calendar_search_globs()
+        finally:
+            os.environ.pop('APPDATA', None)
+        joined = ' '.join(globs)
+        self.assertIn('MetaQuotes', joined)
+        self.assertIn('MQL5', joined)
+        self.assertIn(mt5_client.CALENDAR_FILENAME, joined)
+
+    def test_explicit_path_beats_everything(self):
+        made = self._terminal('ABC123', events=[{'time': NOW, 'currency': 'USD',
+                                                 'event': 'CPI', 'importance': 3}])
+        out = mt5_client.calendar(path=str(made))
+        self.assertEqual(out['file_source'], 'param')
+        self.assertEqual(out['count'], 1)
+
+    def test_env_var_beats_discovery(self):
+        made = self._terminal('ABC123')
+        os.environ['MT5_CALENDAR_FILE'] = str(made)
+        out = mt5_client.calendar()
+        self.assertEqual(out['file_source'], 'env')
+
+    def test_error_names_where_it_looked(self):
+        # Point discovery at the empty temp root, so the test does not depend
+        # on whether the machine running it happens to have a real export.
+        original = mt5_client.calendar_search_globs
+        mt5_client.calendar_search_globs = self._globs
+        try:
+            with self.assertRaises(mt5_client.Mt5Error) as ctx:
+                mt5_client.calendar(path=None)
+        finally:
+            mt5_client.calendar_search_globs = original
+        message = str(ctx.exception)
+        self.assertIn('calendar_export.mq5', message)
+        self.assertIn('Searched:', message)
+
+    def test_discovery_is_used_when_nothing_is_configured(self):
+        made = self._terminal('ABC123', events=[{'time': NOW, 'currency': 'USD',
+                                                 'event': 'CPI', 'importance': 3}])
+        original = mt5_client.calendar_search_globs
+        mt5_client.calendar_search_globs = self._globs
+        try:
+            out = mt5_client.calendar()
+        finally:
+            mt5_client.calendar_search_globs = original
+        self.assertEqual(out['file_source'], 'discovered')
+        self.assertEqual(Path(out['source_file']), made)
+
+    def test_a_configured_but_missing_file_is_reported_distinctly(self):
+        os.environ['MT5_CALENDAR_FILE'] = str(self.root / 'nope.json')
+        with self.assertRaises(mt5_client.Mt5Error) as ctx:
+            mt5_client.calendar()
+        self.assertIn('not found', str(ctx.exception))
 
 
 if __name__ == '__main__':
