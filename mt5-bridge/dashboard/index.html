@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MT5 Status</title>
+  <link rel="stylesheet" href="/dashboard/style.css">
+</head>
+<body>
+  <header>
+    <h1>MT5 Status</h1>
+    <div class="controls">
+      <label>Refresh
+        <select id="interval">
+          <option value="0">manual</option>
+          <option value="5000" selected>5s</option>
+          <option value="15000">15s</option>
+          <option value="60000">60s</option>
+        </select>
+      </label>
+      <button id="refresh" type="button">Refresh now</button>
+      <span id="stamp" class="muted"></span>
+    </div>
+  </header>
+
+  <!-- Connection first: everything below is meaningless if this is stale. -->
+  <section id="connection" class="strip"></section>
+
+  <section id="news"></section>
+
+  <div class="grid">
+    <section id="account" class="card">
+      <h2>Account</h2>
+      <div class="body">loading…</div>
+    </section>
+
+    <section id="pnl" class="card">
+      <h2>Realised P&amp;L</h2>
+      <div class="body">loading…</div>
+    </section>
+  </div>
+
+  <section id="positions" class="card">
+    <h2>Open positions</h2>
+    <div class="body">loading…</div>
+  </section>
+
+  <section id="orders" class="card">
+    <h2>Pending orders</h2>
+    <div class="body">loading…</div>
+  </section>
+
+  <footer class="muted">
+    Read-only. This page cannot place, modify or close a position.
+  </footer>
+
+  <script src="/dashboard/app.js"></script>
+</body>
+</html>

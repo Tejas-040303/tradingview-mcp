@@ -5,9 +5,12 @@ Pure functions, so no terminal and no network. Fixtures use the decoded deal
 shape mt5_client.deals() emits.
 """
 import unittest
+from datetime import datetime, timezone
 
 from analytics import (
     analyze,
+    period_bounds,
+    realized_pnl,
     closed_trades,
     equity_curve,
     expectancy,
@@ -201,6 +204,57 @@ class TestExpectancy(unittest.TestCase):
 
     def test_empty_history(self):
         self.assertEqual(expectancy([])['trades'], 0)
+
+
+class TestPeriodBounds(unittest.TestCase):
+    """Windows for the status view's P&L strip, anchored to UTC."""
+
+    def setUp(self):
+        # Wednesday 2026-01-07 15:30 UTC
+        self.now = MONDAY + 2 * 86400 + 15 * HOUR + 1800
+
+    def test_today_starts_at_utc_midnight(self):
+        start, end = period_bounds(self.now)['today']
+        self.assertEqual(start, MONDAY + 2 * 86400)
+        self.assertEqual(end, self.now)
+
+    def test_week_starts_on_monday(self):
+        start, _ = period_bounds(self.now)['week']
+        self.assertEqual(start, MONDAY)
+        self.assertEqual(weekday_of(start), 'monday')
+
+    def test_month_starts_on_the_first(self):
+        start, _ = period_bounds(self.now)['month']
+        self.assertEqual(
+            datetime.fromtimestamp(start, tz=timezone.utc).strftime('%Y-%m-%d'),
+            '2026-01-01')
+
+    def test_a_monday_is_its_own_week_start(self):
+        start, _ = period_bounds(MONDAY + 6 * HOUR)['week']
+        self.assertEqual(start, MONDAY)
+
+
+class TestRealizedPnl(unittest.TestCase):
+    def test_sums_only_inside_the_window(self):
+        deals = [deal(profit=5.0, at=MONDAY), deal(profit=-3.0, at=MONDAY + 86400)]
+        out = realized_pnl(deals, MONDAY, MONDAY + 3600)
+        self.assertEqual(out, {'net': 5.0, 'trades': 1})
+
+    def test_includes_costs(self):
+        out = realized_pnl([deal(profit=10.0, commission=-1.0, at=MONDAY)],
+                           MONDAY - 60, MONDAY + 60)
+        self.assertEqual(out['net'], 9.0)
+
+    def test_entries_are_not_counted(self):
+        out = realized_pnl([deal(profit=0.0, entry='in', at=MONDAY)], MONDAY - 60, MONDAY + 60)
+        self.assertEqual(out['trades'], 0)
+
+    def test_deals_without_utc_time_are_excluded(self):
+        out = realized_pnl([deal(profit=5.0, time_utc=None)], 0, 9_999_999_999)
+        self.assertEqual(out['trades'], 0)
+
+    def test_empty_window_is_zero_not_an_error(self):
+        self.assertEqual(realized_pnl([], MONDAY, MONDAY + 60), {'net': 0.0, 'trades': 0})
 
 
 class TestAnalyze(unittest.TestCase):
