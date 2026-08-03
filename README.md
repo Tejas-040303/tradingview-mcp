@@ -182,7 +182,9 @@ npm run status         # report what is up, start nothing
 ```
 
 It probes both services first, starts only what is missing, and leaves anything
-already running alone. Child output is streamed with a `[tv]` / `[bridge]`
+already running alone. It then prints the addresses worth knowing — dashboard
+URL, API endpoint, CDP endpoint, every bridge route, and the log paths — rather
+than just "up" or "down". Child output is streamed with a `[tv]` / `[bridge]`
 prefix and mirrored to `logs/`; lines that look like errors are surfaced even
 without `--verbose`, and a service that exits non-zero prints the tail of its
 log. Ctrl+C stops only the services it started.
@@ -197,7 +199,18 @@ After the bridge is up it reports whether MT5 is actually connected — a bridge
 answering on its port and a terminal being reachable are different things, and
 conflating them is how "it's running" turns into a confusing debugging session.
 
-### 6. Optional — the MT5 bridge
+### 6. Status dashboard
+
+With the bridge running, open:
+
+```
+http://127.0.0.1:8765/
+```
+
+Account, open positions, pending orders, realised P&L by period, and a news
+blackout banner. Read-only — the page cannot place, modify or close anything.
+
+### 7. Optional — the MT5 bridge
 
 MetaTrader 5 has no Node binding, so the `mt5` server talks to a small local Python process:
 

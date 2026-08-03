@@ -9,7 +9,7 @@ Input is the deal shape mt5_client.deals() emits: enums decoded to strings
 (`type`, `entry`, `reason`), and timestamps expanded so `time_utc` is real UTC
 or None. Everything here joins on `time_utc`, never the broker clock.
 """
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from normalize import CLOSING_ENTRIES, iso
 
@@ -243,6 +243,37 @@ def expectancy(deals):
         # a sub-50% win rate is a losing combination on both counts.
         'payoff_ratio': round(avg_win / abs(avg_loss), 2) if wins and losses else None,
     }
+
+
+def period_bounds(now_ts):
+    """
+    UTC day/week/month boundaries for the P&L strip.
+
+    Everything is anchored to UTC because that is the clock the rest of the
+    system joins on. A broker-local "today" would disagree with the calendar
+    and with every timestamp elsewhere.
+    """
+    now = datetime.fromtimestamp(int(now_ts), tz=timezone.utc)
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    week_start = day_start - timedelta(days=day_start.weekday())   # Monday
+    month_start = day_start.replace(day=1)
+    return {
+        'today': (int(day_start.timestamp()), int(now_ts)),
+        'week': (int(week_start.timestamp()), int(now_ts)),
+        'month': (int(month_start.timestamp()), int(now_ts)),
+    }
+
+
+def realized_pnl(deals, from_ts, to_ts):
+    """Net realised P&L for closed trades inside a UTC window."""
+    total, count = 0.0, 0
+    for deal in closed_trades(deals):
+        ts = deal.get('time_utc')
+        if ts is None or ts < from_ts or ts > to_ts:
+            continue
+        total += _net(deal)
+        count += 1
+    return {'net': round(total, 2), 'trades': count}
 
 
 def analyze(deals, starting_balance=None, group_by=('reason', 'session', 'symbol')):

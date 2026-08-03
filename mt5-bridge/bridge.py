@@ -24,10 +24,12 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 import mt5_client
-from analytics import analyze
-from normalize import blackout_status, filter_calendar
+from analytics import analyze, period_bounds, realized_pnl
+from mt5_client import Mt5Error
+from normalize import blackout_status, filter_calendar, iso
 
 DEFAULT_PORT = 8765
+DASHBOARD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dashboard')
 
 
 def _one(params, key, default=None):
@@ -44,6 +46,68 @@ def _csv(params, key):
 
 def _truthy(value):
     return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _section(fn):
+    """
+    Run one part of the overview, capturing failure rather than propagating it.
+
+    The status view must degrade in pieces: a missing calendar file should not
+    blank out the account card, and MT5 being unreachable should not hide the
+    fact that the bridge itself is fine.
+    """
+    try:
+        return fn()
+    except Mt5Error as exc:
+        return {'success': False, 'error': str(exc)}
+    except Exception as exc:  # pragma: no cover - defensive
+        return {'success': False, 'error': f'{type(exc).__name__}: {exc}'}
+
+
+def overview(params):
+    """
+    Everything the status view needs, in one request.
+
+    Six separate polls for one screen is wasteful and gives a torn picture when
+    the parts disagree; this reads once and stamps a single generated_at.
+    """
+    now = int(time.time())
+    bounds = period_bounds(now)
+    month_from, _ = bounds['month']
+
+    deals_rows = []
+    deals_error = None
+    try:
+        deals_rows = mt5_client.deals(
+            from_ts=month_from, to_ts=now, summary=False, limit=1_000_000,
+        ).get('deals') or []
+    except Mt5Error as exc:
+        deals_error = str(exc)
+
+    pnl = {name: realized_pnl(deals_rows, start, end)
+           for name, (start, end) in bounds.items()}
+    if deals_error:
+        pnl = {'error': deals_error}
+
+    blackout = _section(lambda: blackout_status(
+        mt5_client.calendar(path=_one(params, 'file'))['events'],
+        now_ts=now,
+        before_min=int(_one(params, 'before_min', 15)),
+        after_min=int(_one(params, 'after_min', 15)),
+        currencies=_csv(params, 'currencies') or ['USD'],
+        min_importance=_one(params, 'min_importance', 'high'),
+    ))
+
+    return {
+        'success': True,
+        'generated_at': iso(now),
+        'health': _section(mt5_client.health),
+        'account': _section(mt5_client.account),
+        'positions': _section(mt5_client.positions),
+        'orders': _section(mt5_client.orders),
+        'pnl': pnl,
+        'blackout': blackout,
+    }
 
 
 def route(path, params):
@@ -93,6 +157,9 @@ def route(path, params):
             offset=int(_one(params, 'offset', 0)),
             summary=_truthy(_one(params, 'summary', '')),
         )
+
+    if path == '/overview':
+        return overview(params)
 
     if path == '/analytics':
         now = int(time.time())
@@ -167,6 +234,35 @@ class Handler(BaseHTTPRequestHandler):
             return True
         return self.headers.get('X-Bridge-Token') == expected
 
+    def _serve_dashboard(self, url_path):
+        """
+        Serve the status dashboard.
+
+        Hosted by the bridge rather than a separate server so the page is
+        same-origin with the API it reads — no CORS, no proxy, and one fewer
+        process for the launcher to manage.
+        """
+        rel = '/index.html' if url_path in ('/', '/dashboard', '/dashboard/') else url_path
+        rel = rel[len('/dashboard'):] if rel.startswith('/dashboard/') else rel
+        target = os.path.normpath(os.path.join(DASHBOARD_DIR, rel.lstrip('/')))
+
+        # Refuse anything that escapes the dashboard directory.
+        if not target.startswith(DASHBOARD_DIR) or not os.path.isfile(target):
+            return False
+
+        mime = {'.html': 'text/html', '.js': 'text/javascript',
+                '.css': 'text/css', '.json': 'application/json',
+                '.svg': 'image/svg+xml'}.get(os.path.splitext(target)[1], 'text/plain')
+        with open(target, 'rb') as handle:
+            body = handle.read()
+        self.send_response(200)
+        self.send_header('Content-Type', f'{mime}; charset=utf-8')
+        self.send_header('Content-Length', str(len(body)))
+        self.send_header('Cache-Control', 'no-store')
+        self.end_headers()
+        self.wfile.write(body)
+        return True
+
     def do_GET(self):
         if not self._authorized():
             self._send(401, {'success': False, 'error': 'Invalid or missing X-Bridge-Token'})
@@ -174,6 +270,14 @@ class Handler(BaseHTTPRequestHandler):
 
         parsed = urlparse(self.path)
         params = parse_qs(parsed.query)
+
+        if parsed.path in ('/', '/dashboard', '/dashboard/') or parsed.path.startswith('/dashboard/'):
+            if self._serve_dashboard(parsed.path):
+                return
+            self._send(404, {'success': False,
+                             'error': 'Dashboard files not found',
+                             'hint': f'Expected them in {DASHBOARD_DIR}'})
+            return
         try:
             result = route(parsed.path.rstrip('/') or '/health', params)
         except ValueError as exc:

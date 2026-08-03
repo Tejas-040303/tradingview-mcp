@@ -114,6 +114,8 @@ which PowerShell treats as an operator. `Invoke-RestMethod <url> | ConvertTo-Jso
 | `/bars` | `?symbol=&timeframe=5&count=100&summary=1` |
 | `/deals` | `?from=&to=&symbol=&limit=100&offset=0&summary=1` — fills, for journaling |
 | `/analytics` | `?from=&to=&starting_balance=&group_by=&curve=1` — expectancy, drawdown, streaks, breakdowns |
+| `/overview` | everything the status dashboard needs, in one request |
+| `/` | the status dashboard itself |
 | `/calendar` | `?currencies=USD&min_importance=high&from=&to=` |
 | `/blackout` | `?currencies=USD&before_min=15&after_min=15` |
 
@@ -336,7 +338,7 @@ widens sharply around news.
 python -m unittest discover -s mt5-bridge
 ```
 
-144 tests, all runnable without a terminal and gated in CI on Linux.
+153 tests, all runnable without a terminal and gated in CI on Linux.
 
 `test_normalize.py` (88) covers the pure logic: timeframe resolution, bar
 summaries, MQL5 value decoding, calendar filtering, blackout windows including
@@ -344,9 +346,9 @@ boundary cases and asymmetric windows, server-offset inference including the
 stale-weekend-tick guard, timestamp labelling, CFD price normalisation, symbol
 search, deal enum decoding, deal summaries and pagination.
 
-`test_analytics.py` (33) covers the history analytics — equity curve, drawdown
+`test_analytics.py` (42) covers the history analytics — equity curve, drawdown
 including the unrecovered case, grouping by session/reason/symbol/hour/weekday,
-streaks and expectancy.
+streaks, expectancy, UTC period boundaries and windowed realised P&L.
 
 `test_mt5_client.py` (23) exercises every route end to end against a fake
 MetaTrader 5 module. These assert plumbing, not market behaviour — but that is
@@ -355,6 +357,28 @@ pure-function testing could have caught.
 
 Real terminal behaviour is still unverified by CI. Check it with the `curl`
 calls above.
+
+## Status dashboard
+
+The bridge serves a read-only status page at its root:
+
+```
+http://127.0.0.1:8765/
+```
+
+Connection strip, account, open positions, pending orders, realised P&L for
+today/week/month, and the news blackout banner. It reads `/overview` — one
+request for the whole screen, so the panels can never disagree with each other.
+
+Every section degrades on its own: a missing calendar file greys out the news
+banner without touching the account card, and MT5 being unreachable still shows
+that the bridge itself is alive. The connection strip comes first deliberately,
+because an unknown broker clock offset makes every timestamp below it null.
+
+It is hosted by the bridge rather than a separate server so the page is
+same-origin with the API it reads — no CORS, no proxy, one fewer process.
+
+No framework and no build step: plain HTML, CSS and JavaScript.
 
 ## Using it from Claude Code
 

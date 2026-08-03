@@ -172,7 +172,10 @@ async function main() {
   console.log(dim('tradingview-mcp — local stack'));
   const initial = await status();
 
-  if (opts.statusOnly) return;
+  if (opts.statusOnly) {
+    printEndpoints(initial);
+    return;
+  }
 
   if (opts.tv && !initial.tv) {
     const { cmd, args: cmdArgs } = tvLauncher();
@@ -216,13 +219,43 @@ async function main() {
     } catch { /* already reported by the probe above */ }
   }
 
-  if (started.length === 0) {
-    console.log(dim('Nothing to start. Everything was already running.'));
-    return;
-  }
+  printEndpoints(final);
 
-  console.log(dim(`Logs: ${LOG_DIR}`));
-  console.log(dim('Ctrl+C stops the services this script started.'));
+  if (started.length === 0) {
+    console.log(dim('Nothing was started — everything was already running.'));
+  } else {
+    console.log(dim('Ctrl+C stops the services this script started.'));
+  }
+}
+
+/**
+ * Print the addresses worth knowing, in full.
+ *
+ * "up / down" is not enough to work with — the useful output is the URLs you
+ * can paste into a browser or curl, the log paths, and the exact port each
+ * thing is on.
+ */
+function printEndpoints(state) {
+  const bridge = `http://127.0.0.1:${BRIDGE_PORT}`;
+  const cdp = `http://127.0.0.1:${CDP_PORT}`;
+
+  console.log('');
+  console.log('  Endpoints');
+  console.log(`    Dashboard      ${state.bridge ? green(`${bridge}/`) : dim(`${bridge}/ (bridge down)`)}`);
+  console.log(`    Bridge API     ${state.bridge ? `${bridge}/health` : dim(`${bridge}/health (down)`)}`);
+  console.log(`    TradingView    ${state.tv ? `${cdp}/json/version` : dim(`${cdp}/json/version (down)`)}`);
+  console.log('');
+  console.log('  Bridge routes');
+  console.log(dim('    /overview  /health  /account  /symbols  /positions  /orders'));
+  console.log(dim('    /quote  /bars  /deals  /analytics  /calendar  /blackout'));
+  console.log('');
+  console.log('  Logs');
+  console.log(dim(`    ${join(LOG_DIR, 'bridge.log')}`));
+  console.log(dim(`    ${join(LOG_DIR, 'tv.log')}`));
+  console.log('');
+  console.log(dim(`  Bound to 127.0.0.1 only — not reachable from other devices on your network.`));
+  console.log(dim('  That is deliberate: this serves live broker account data.'));
+  console.log('');
 }
 
 function shutdown() {
