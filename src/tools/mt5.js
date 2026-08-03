@@ -105,6 +105,23 @@ export function registerMt5Tools(server) {
   );
 
   server.tool(
+    'mt5_trades',
+    'Fills paired into actual trades by position_id — entry and exit price, duration, partial closes, exit reason. MT5 reports deals, not trades, so this is the only way to see how long a position was held. The summary includes average hold time for winners versus losers. Returns a summary by default; pass summary=false with limit/offset to page through individual trades.',
+    {
+      from: z.coerce.number().optional().describe('Window start, unix seconds UTC (default 30 days ago)'),
+      to: z.coerce.number().optional().describe('Window end, unix seconds UTC (default now)'),
+      symbol: z.string().optional().describe('Narrow to one symbol'),
+      summary: z.coerce.boolean().optional().describe('Summary only (default true)'),
+      closed_only: z.coerce.boolean().optional().describe('Exclude positions still open (default false)'),
+      limit: z.coerce.number().optional().describe('Trades per page when summary=false (default 50)'),
+      offset: z.coerce.number().optional().describe('Page offset when summary=false (default 0)'),
+    },
+    guard(({ from, to, symbol, summary, closed_only, limit, offset }) =>
+      core.trades({ from, to, symbol, summary: summary !== false,
+        closed_only: closed_only === true, limit, offset })),
+  );
+
+  server.tool(
     'mt5_analytics',
     'Deep analysis of closed trade history: expectancy, payoff ratio, win/loss streaks, max drawdown, and performance broken down by exit reason, session, symbol, weekday or hour. Answers "when do I lose money" rather than just "how much". Pass starting_balance to get drawdown as a percentage.',
     {

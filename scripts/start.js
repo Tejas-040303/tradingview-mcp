@@ -247,7 +247,7 @@ function printEndpoints(state) {
   console.log('');
   console.log('  Bridge routes');
   console.log(dim('    /overview  /health  /account  /symbols  /positions  /orders'));
-  console.log(dim('    /quote  /bars  /deals  /analytics  /calendar  /blackout'));
+  console.log(dim('    /quote  /bars  /deals  /trades  /analytics  /calendar  /blackout'));
   console.log('');
   console.log('  Logs');
   console.log(dim(`    ${join(LOG_DIR, 'bridge.log')}`));

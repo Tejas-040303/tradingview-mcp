@@ -135,6 +135,20 @@ export function deals({ from, to, symbol, summary = true, limit = 50, offset = 0
   }, _deps);
 }
 
+export function trades({ from, to, symbol, summary = true, closed_only = false,
+  limit = 50, offset = 0, _deps } = {}) {
+  const now = Math.floor(Date.now() / 1000);
+  return get('/trades', {
+    from: from ?? now - 30 * 86400,
+    to: to ?? now,
+    symbol,
+    summary: summary ? 1 : '',
+    closed_only: closed_only ? 1 : '',
+    limit,
+    offset,
+  }, _deps);
+}
+
 export function analytics({ from, to, symbol, starting_balance, group_by, curve = false, _deps } = {}) {
   const now = Math.floor(Date.now() / 1000);
   return get('/analytics', {
