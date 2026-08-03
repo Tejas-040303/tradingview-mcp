@@ -245,6 +245,130 @@ def expectancy(deals):
     }
 
 
+OPENING_ENTRIES = ('in',)
+# 'inout' is a reversal — it realises P&L on the old exposure. Treated as a
+# close here; on a hedging account (which retail brokers typically use) each
+# position carries its own id, so this rarely appears.
+CLOSING_DEAL_ENTRIES = ('out', 'out_by', 'inout')
+
+
+def _weighted_price(deals):
+    """Volume-weighted average fill price, or None if nothing filled."""
+    volume = sum(d.get('volume') or 0 for d in deals)
+    if not volume:
+        return None
+    return sum((d.get('price') or 0) * (d.get('volume') or 0) for d in deals) / volume
+
+
+def pair_trades(deals, include_open=True):
+    """
+    Group fills into trades by position_id.
+
+    MetaTrader 5 reports *deals*, not trades: opening a position and closing it
+    are separate rows, and a partial close adds more. Treating each closing deal
+    as a trade is fine for win rate and net P&L, but it cannot answer how long
+    a position was held or where it was entered — which is the question behind
+    "do I hold losers longer than winners".
+
+    Windows that start mid-position see closes with no matching open. Those are
+    reported with entry_missing set rather than a fabricated entry price, since
+    the entry genuinely happened before the data we have.
+    """
+    groups = {}
+    for deal in deals or []:
+        # Balance, credit and commission rows are not part of any position.
+        if str(deal.get('type')) not in ('buy', 'sell'):
+            continue
+        pid = deal.get('position_id')
+        if not pid:
+            continue
+        groups.setdefault(pid, []).append(deal)
+
+    trades = []
+    for pid, rows in groups.items():
+        rows.sort(key=lambda d: (d.get('time_msc_utc') or 0, d.get('time_utc') or 0))
+        opens = [d for d in rows if str(d.get('entry')) in OPENING_ENTRIES]
+        closes = [d for d in rows if str(d.get('entry')) in CLOSING_DEAL_ENTRIES]
+
+        if not include_open and not closes:
+            continue
+
+        open_times = [d['time_utc'] for d in opens if d.get('time_utc') is not None]
+        close_times = [d['time_utc'] for d in closes if d.get('time_utc') is not None]
+        opened_at = min(open_times) if open_times else None
+        closed_at = max(close_times) if close_times else None
+
+        # Direction comes from the opening fill: a buy entry is a long. Falling
+        # back to the inverse of the closing fill keeps windows that start
+        # mid-position usable.
+        if opens:
+            direction = 'long' if str(opens[0].get('type')) == 'buy' else 'short'
+        elif closes:
+            direction = 'short' if str(closes[0].get('type')) == 'buy' else 'long'
+        else:
+            direction = None
+
+        trades.append({
+            'position_id': pid,
+            'symbol': (rows[0].get('symbol') if rows else None),
+            'direction': direction,
+            'opened_utc': opened_at,
+            'opened': iso(opened_at) if opened_at else None,
+            'closed_utc': closed_at,
+            'closed': iso(closed_at) if closed_at else None,
+            'duration_sec': (closed_at - opened_at) if (opened_at and closed_at) else None,
+            'entry_price': round(_weighted_price(opens), 5) if opens else None,
+            'exit_price': round(_weighted_price(closes), 5) if closes else None,
+            'volume': round(sum(d.get('volume') or 0 for d in opens), 2) if opens
+                      else round(sum(d.get('volume') or 0 for d in closes), 2),
+            'net': round(sum(_net(d) for d in rows), 2),
+            'exit_reason': str(closes[-1].get('reason')) if closes else None,
+            'deals': len(rows),
+            'partial_closes': max(0, len(closes) - 1),
+            'open': not closes,
+            'entry_missing': not opens,
+        })
+
+    trades.sort(key=lambda t: t['opened_utc'] or t['closed_utc'] or 0)
+    return trades
+
+
+def summarize_trades(trades):
+    """
+    Trade-level summary, including how long winners are held versus losers.
+
+    That comparison is the one deals alone cannot produce, and it separates
+    "my exits are good" from "I cut winners early and let losers reach the
+    stop" — two stories that look identical in a win-rate table.
+    """
+    closed = [t for t in (trades or []) if not t['open']]
+    if not closed:
+        return None
+
+    wins = [t for t in closed if t['net'] > 0]
+    losses = [t for t in closed if t['net'] < 0]
+    timed = [t for t in closed if t['duration_sec'] is not None]
+    timed_wins = [t for t in timed if t['net'] > 0]
+    timed_losses = [t for t in timed if t['net'] < 0]
+
+    def avg_seconds(rows):
+        return round(sum(t['duration_sec'] for t in rows) / len(rows)) if rows else None
+
+    return {
+        'trades': len(closed),
+        'open_trades': len([t for t in trades if t['open']]),
+        'wins': len(wins),
+        'losses': len(losses),
+        'win_rate_pct': round(len(wins) / len(closed) * 100, 1),
+        'net': round(sum(t['net'] for t in closed), 2),
+        'avg_duration_sec': avg_seconds(timed),
+        'avg_win_duration_sec': avg_seconds(timed_wins),
+        'avg_loss_duration_sec': avg_seconds(timed_losses),
+        'partial_closes': sum(t['partial_closes'] for t in closed),
+        'entry_missing': len([t for t in closed if t['entry_missing']]),
+    }
+
+
 def period_bounds(now_ts):
     """
     UTC day/week/month boundaries for the P&L strip.

@@ -24,9 +24,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 import mt5_client
-from analytics import analyze, period_bounds, realized_pnl
+from analytics import analyze, pair_trades, period_bounds, realized_pnl, summarize_trades
 from mt5_client import Mt5Error
-from normalize import blackout_status, filter_calendar, iso
+from normalize import blackout_status, filter_calendar, iso, paginate
 
 DEFAULT_PORT = 8765
 DASHBOARD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dashboard')
@@ -160,6 +160,30 @@ def route(path, params):
 
     if path == '/overview':
         return overview(params)
+
+    if path == '/trades':
+        now = int(time.time())
+        data = mt5_client.deals(
+            from_ts=int(_one(params, 'from', now - 30 * 86400)),
+            to_ts=int(_one(params, 'to', now)),
+            symbol=_one(params, 'symbol'),
+            summary=False,
+            limit=1_000_000,
+        )
+        trades = pair_trades(data.get('deals') or [],
+                             include_open=not _truthy(_one(params, 'closed_only', '')))
+        out = {
+            'success': True,
+            'requested_window_utc': data['requested_window_utc'],
+            'summary': summarize_trades(trades),
+        }
+        if not _truthy(_one(params, 'summary', '')):
+            window, page = paginate(trades,
+                                    limit=int(_one(params, 'limit', 100)),
+                                    offset=int(_one(params, 'offset', 0)))
+            out['page'] = page
+            out['trades'] = window
+        return out
 
     if path == '/analytics':
         now = int(time.time())
@@ -328,8 +352,8 @@ def main():
 
     server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
     print(f'Read-only bridge listening on http://127.0.0.1:{args.port}')
-    print('Routes: /health /account /symbols /positions /orders /quote /bars /deals'
-          ' /analytics /calendar /blackout')
+    print('Routes: /overview /health /account /symbols /positions /orders /quote'
+          ' /bars /deals /trades /analytics /calendar /blackout')
     try:
         server.serve_forever()
     except KeyboardInterrupt:
