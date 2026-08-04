@@ -341,11 +341,10 @@ function printEndpoints(state) {
 
   console.log('');
   console.log('  Endpoints');
-  console.log(`    Status page    ${state.bridge ? green(`${bridge}/`) : dim(`${bridge}/ (bridge down)`)}`);
-  console.log(`    Analytics      ${state.bridge ? green(`${bridge}/dashboard/app/`)
-    : dim(`${bridge}/dashboard/app/ (bridge down)`)}`);
-  console.log(`    History (plain)${state.bridge ? ` ${bridge}/dashboard/history.html`
-    : dim(` ${bridge}/dashboard/history.html (bridge down)`)}`);
+  console.log(`    Dashboard      ${state.bridge ? green(`${bridge}/`) : dim(`${bridge}/ (bridge down)`)}`);
+  console.log(dim('                   Status and Analytics are tabs on that one page.'));
+  console.log(`    Fallback pages ${state.bridge ? dim(`${bridge}/dashboard/index.html · ${bridge}/dashboard/history.html`)
+    : dim('(bridge down)')}`);
   console.log(`    Bridge API     ${state.bridge ? `${bridge}/health` : dim(`${bridge}/health (down)`)}`);
   console.log(`    TradingView    ${state.tv ? `${cdp}/json/version` : dim(`${cdp}/json/version (down)`)}`);
   console.log('');
