@@ -25,7 +25,9 @@
     "test:count": "node --test --test-reporter=spec tests/e2e.test.js 2>&1 | tail -5",
     "start:mt5": "node src/mt5-server.js",
     "start:all": "node scripts/start.js",
-    "status": "node scripts/start.js --status"
+    "status": "node scripts/start.js --status",
+    "build:dashboard": "npm --prefix dashboard-app install && npm --prefix dashboard-app run build",
+    "dev:dashboard": "npm --prefix dashboard-app run dev"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
