@@ -24,7 +24,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 import mt5_client
-from analytics import analyze, pair_trades, period_bounds, realized_pnl, summarize_trades
+from analytics import (analyze, analyze_trades, filter_trades, pair_trades,
+                       period_bounds, realized_pnl, summarize_trades)
 from mt5_client import Mt5Error
 from normalize import blackout_status, filter_calendar, iso, paginate
 
@@ -110,6 +111,75 @@ def overview(params):
     }
 
 
+def _number(params, key):
+    raw = _one(params, key)
+    if raw is None or str(raw).strip() == '':
+        return None
+    return float(raw)
+
+
+def history(params):
+    """
+    The history view, filtered, in one request.
+
+    Filtering happens here rather than in the browser so the trade table and
+    every statistic beside it are computed from the same rows by the same
+    tested code. A second implementation in JavaScript would drift, and the
+    first sign of it would be a win rate that disagrees with the table under it.
+    """
+    now = int(time.time())
+    data = mt5_client.deals(
+        from_ts=int(_one(params, 'from', now - 30 * 86400)),
+        to_ts=int(_one(params, 'to', now)),
+        symbol=_one(params, 'symbol'),
+        summary=False,
+        limit=1_000_000,
+    )
+    include_open = not _truthy(_one(params, 'closed_only', ''))
+    trades = pair_trades(data.get('deals') or [], include_open=include_open)
+
+    # Offered before filtering, so choosing "short" does not empty the dropdown
+    # that would let you choose anything else.
+    facets = {
+        'symbols': sorted({t['symbol'] for t in trades if t.get('symbol')}),
+        'exit_reasons': sorted({t['exit_reason'] for t in trades if t.get('exit_reason')}),
+    }
+
+    filtered = filter_trades(
+        trades,
+        symbol=_one(params, 'filter_symbol'),
+        direction=_one(params, 'direction'),
+        exit_reason=_one(params, 'exit_reason'),
+        min_net=_number(params, 'min_net'),
+        max_net=_number(params, 'max_net'),
+        include_open=include_open,
+    )
+
+    balance = _one(params, 'starting_balance')
+    groups = _csv(params, 'group_by') or ['exit_reason', 'session', 'weekday', 'symbol']
+    out = analyze_trades(
+        filtered,
+        starting_balance=float(balance) if balance else None,
+        group_by=tuple(groups),
+    )
+    if not _truthy(_one(params, 'curve', 'true')):
+        out['equity_curve_points'] = len(out.pop('equity_curve'))
+
+    window, page = paginate(filtered,
+                            limit=int(_one(params, 'limit', 200)),
+                            offset=int(_one(params, 'offset', 0)))
+    return {
+        'success': True,
+        'generated_at': iso(now),
+        'requested_window_utc': data['requested_window_utc'],
+        'total_trades': len(trades),
+        'facets': facets,
+        'page': page,
+        'trades': window,
+        **out,
+    }
+
+
 def route(path, params):
     """Dispatch a GET. Returns a JSON-serialisable dict."""
     if path == '/health':
@@ -184,6 +254,9 @@ def route(path, params):
             out['page'] = page
             out['trades'] = window
         return out
+
+    if path == '/history':
+        return history(params)
 
     if path == '/analytics':
         now = int(time.time())
@@ -352,8 +425,8 @@ def main():
 
     server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
     print(f'Read-only bridge listening on http://127.0.0.1:{args.port}')
-    print('Routes: /overview /health /account /symbols /positions /orders /quote'
-          ' /bars /deals /trades /analytics /calendar /blackout')
+    print('Routes: /overview /history /health /account /symbols /positions /orders'
+          ' /quote /bars /deals /trades /analytics /calendar /blackout')
     try:
         server.serve_forever()
     except KeyboardInterrupt:

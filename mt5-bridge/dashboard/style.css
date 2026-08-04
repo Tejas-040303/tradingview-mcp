@@ -40,6 +40,8 @@ header {
 
 h1 { font-size: 1.1rem; margin: 0; }
 h2 { font-size: .8rem; margin: 0 0 .6rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+/* Notes appended to a heading are prose, not a label — don't shout them. */
+h2 .muted { text-transform: none; letter-spacing: 0; }
 
 .controls { display: flex; gap: .75rem; align-items: center; }
 select, button {
@@ -64,6 +66,10 @@ button:hover { border-color: var(--muted); }
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
   gap: 1rem;
 }
+
+/* Breakdown panels carry six numeric columns; 300px clips them into a
+   horizontal scrollbar on every card. Fewer, wider cards read better. */
+.grid.wide { grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); }
 
 /* Connection strip */
 .strip {
@@ -112,6 +118,72 @@ tbody tr:last-child td { border-bottom: 0; }
 }
 
 footer { margin-top: 1.5rem; }
+
+/* Tabs */
+.tabs { display: flex; gap: .25rem; border-bottom: 1px solid var(--line); margin-bottom: 1rem; }
+.tab {
+  padding: .45rem .9rem; color: var(--muted); text-decoration: none;
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
+}
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--text); border-bottom-color: var(--up); }
+
+/* Filter bar */
+.filters { padding: .75rem 1rem; }
+.filter-row {
+  display: flex; flex-wrap: wrap; gap: .75rem 1rem; align-items: center;
+}
+.filter-row + .filter-row { margin-top: .6rem; }
+.filter-row label { display: inline-flex; align-items: center; gap: .35rem; color: var(--muted); }
+.filter-row label.check { gap: .4rem; }
+input[type="date"], input[type="number"] {
+  background: var(--bg); color: var(--text);
+  border: 1px solid var(--line); border-radius: 6px;
+  padding: .25rem .45rem; font: inherit;
+}
+input[type="number"] { width: 7.5rem; }
+
+/* Stat tiles */
+.tiles {
+  display: grid; gap: .75rem; margin-bottom: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+.tile {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 10px; padding: .7rem .85rem;
+}
+.tile-label { color: var(--muted); font-size: .75rem; text-transform: uppercase; letter-spacing: .05em; }
+.tile-value { font-size: 1.35rem; font-weight: 600; font-variant-numeric: tabular-nums; margin-top: .15rem; }
+.tile-note { color: var(--muted); font-size: .75rem; margin-top: .1rem; }
+
+/* Equity curve */
+.chart { width: 100%; min-width: 520px; height: 260px; display: block; }
+.chart .grid { stroke: var(--line); stroke-width: 1; }
+.chart .zero { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 3; }
+.chart .axis { fill: var(--muted); font-size: 11px; }
+.chart .line { fill: none; stroke-width: 2; vector-effect: non-scaling-stroke; }
+.chart .line.pos { stroke: var(--up); }
+.chart .line.neg { stroke: var(--down); }
+.chart .area { stroke: none; opacity: .12; }
+.chart .area.pos { fill: var(--up); }
+.chart .area.neg { fill: var(--down); }
+
+/* P&L histogram */
+.hist { display: flex; align-items: flex-end; gap: 3px; height: 170px; margin-bottom: .4rem; }
+.hist-col { flex: 1; display: flex; flex-direction: column; justify-content: flex-end; height: 100%; }
+.hist-count { text-align: center; font-size: .7rem; color: var(--muted); }
+.hist-bar { border-radius: 3px 3px 0 0; }
+.hist-bar.up { background: var(--up); }
+.hist-bar.down { background: var(--down); }
+.hist-label {
+  text-align: center; font-size: .65rem; color: var(--muted);
+  margin-top: .25rem; white-space: nowrap; overflow: hidden;
+}
+
+/* Trade table */
+.open-row td { opacity: .65; font-style: italic; }
+.pager { display: flex; gap: .75rem; align-items: center; margin-top: .6rem; }
+button:disabled { opacity: .4; cursor: default; }
 
 /* Scroll wide tables rather than breaking the page layout. */
 .scroll { overflow-x: auto; }

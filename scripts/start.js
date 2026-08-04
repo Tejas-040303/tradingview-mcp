@@ -241,13 +241,15 @@ function printEndpoints(state) {
 
   console.log('');
   console.log('  Endpoints');
-  console.log(`    Dashboard      ${state.bridge ? green(`${bridge}/`) : dim(`${bridge}/ (bridge down)`)}`);
+  console.log(`    Status page    ${state.bridge ? green(`${bridge}/`) : dim(`${bridge}/ (bridge down)`)}`);
+  console.log(`    History page   ${state.bridge ? green(`${bridge}/dashboard/history.html`)
+    : dim(`${bridge}/dashboard/history.html (bridge down)`)}`);
   console.log(`    Bridge API     ${state.bridge ? `${bridge}/health` : dim(`${bridge}/health (down)`)}`);
   console.log(`    TradingView    ${state.tv ? `${cdp}/json/version` : dim(`${cdp}/json/version (down)`)}`);
   console.log('');
   console.log('  Bridge routes');
-  console.log(dim('    /overview  /health  /account  /symbols  /positions  /orders'));
-  console.log(dim('    /quote  /bars  /deals  /trades  /analytics  /calendar  /blackout'));
+  console.log(dim('    /overview  /history  /health  /account  /symbols  /positions'));
+  console.log(dim('    /orders  /quote  /bars  /deals  /trades  /analytics  /calendar  /blackout'));
   console.log('');
   console.log('  Logs');
   console.log(dim(`    ${join(LOG_DIR, 'bridge.log')}`));
