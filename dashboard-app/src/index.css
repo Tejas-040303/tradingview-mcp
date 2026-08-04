@@ -1,0 +1,91 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Tokens, not hard-coded colours. Both themes define the same names so
+ * components never branch on theme, and the viewer's OS preference is honoured
+ * on first paint before any script runs.
+ */
+@layer base {
+  :root {
+    --bg: 250 251 253;
+    --surface: 255 255 255;
+    --elevated: 248 250 252;
+    --line: 226 232 240;
+    --ink: 15 23 42;
+    --muted: 100 116 139;
+    --up: 22 163 74;
+    --down: 220 38 38;
+    --warn: 217 119 6;
+    --info: 37 99 235;
+    --accent: 124 58 237;
+  }
+
+  .dark {
+    --bg: 9 11 16;
+    --surface: 20 23 31;
+    --elevated: 27 31 41;
+    --line: 39 45 58;
+    --ink: 232 236 244;
+    --muted: 138 148 166;
+    --up: 52 211 153;
+    --down: 248 113 113;
+    --warn: 251 191 36;
+    --info: 96 165 250;
+    --accent: 167 139 250;
+  }
+
+  * { @apply border-line; }
+
+  body {
+    @apply bg-bg text-ink antialiased;
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'tnum';
+  }
+
+  /* Numbers must not jitter as they animate or refresh. */
+  .tabular { font-variant-numeric: tabular-nums; }
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-line bg-surface shadow-card;
+  }
+
+  /* Glass is used sparingly — only on the sticky filter bar, where content
+     scrolling underneath is the thing it needs to hint at. */
+  .glass {
+    @apply bg-surface/80 backdrop-blur-xl backdrop-saturate-150;
+  }
+
+  .skeleton {
+    @apply relative overflow-hidden rounded-md bg-elevated;
+  }
+  .skeleton::after {
+    content: '';
+    @apply absolute inset-0 -translate-x-full;
+    background-image: linear-gradient(90deg, transparent, rgb(var(--line) / .6), transparent);
+    animation: shimmer 1.6s infinite;
+  }
+}
+
+/* Respect the OS setting rather than overriding motion for everyone. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
+
+/* Recharts injects its own focus outlines; keep ours consistent. */
+.recharts-wrapper:focus-visible,
+:focus-visible { @apply outline-none ring-2 ring-accent/60 ring-offset-2 ring-offset-bg; }
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: rgb(var(--line));
+  border-radius: 99px;
+  border: 2px solid rgb(var(--bg));
+}

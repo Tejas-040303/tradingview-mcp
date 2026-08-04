@@ -397,7 +397,13 @@ class Handler(BaseHTTPRequestHandler):
         target = os.path.normpath(os.path.join(DASHBOARD_DIR, rel.lstrip('/')))
 
         # Refuse anything that escapes the dashboard directory.
-        if not target.startswith(DASHBOARD_DIR) or not os.path.isfile(target):
+        if not target.startswith(DASHBOARD_DIR):
+            return False
+        # A directory request serves its index, so /dashboard/app/ works like
+        # any other web root rather than 404ing on the folder itself.
+        if os.path.isdir(target):
+            target = os.path.join(target, 'index.html')
+        if not os.path.isfile(target):
             return False
 
         mime = {'.html': 'text/html', '.js': 'text/javascript',
