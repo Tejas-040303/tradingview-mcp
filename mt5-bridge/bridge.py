@@ -24,6 +24,10 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 import mt5_client
+import insights as insight_rules
+from advanced import (behaviour, daily_pnl, heatmap, holding_time_analysis,
+                      kelly_fraction, monte_carlo, recovery_factor,
+                      risk_adjusted, size_analysis)
 from analytics import (analyze, analyze_trades, filter_trades, pair_trades,
                        period_bounds, realized_pnl, summarize_trades)
 from mt5_client import Mt5Error
@@ -118,6 +122,52 @@ def _number(params, key):
     return float(raw)
 
 
+DEFAULT_HEATMAPS = ('weekday:session', 'hour:direction', 'weekday:symbol')
+
+
+def _advanced_blocks(filtered, base, params):
+    """
+    The inference layer: risk-adjusted returns, grids, behaviour and coaching.
+
+    Kept behind ?advanced=true so the default /history payload — and the plain
+    dashboard that reads it — stay exactly as they were. Everything here is
+    derived from `filtered`, so it always agrees with the tiles beside it.
+    """
+    headline = base.get('headline')
+    risk = risk_adjusted(filtered)
+    monte = monte_carlo(filtered, runs=int(_one(params, 'mc_runs', 1000)))
+
+    grids = {}
+    for spec in _csv(params, 'heatmaps') or DEFAULT_HEATMAPS:
+        rows, _, cols = spec.partition(':')
+        try:
+            grids[spec] = heatmap(filtered, rows=rows, cols=cols or 'session')
+        except ValueError as exc:
+            grids[spec] = {'error': str(exc)}
+
+    return {
+        'risk': {
+            **risk,
+            'recovery_factor': recovery_factor(
+                (headline or {}).get('net', 0),
+                (base.get('drawdown') or {}).get('max_drawdown')),
+            'kelly_fraction': kelly_fraction(
+                (headline or {}).get('win_rate_pct'),
+                (headline or {}).get('payoff_ratio')),
+        },
+        'monte_carlo': monte,
+        'daily': daily_pnl(filtered),
+        'heatmaps': grids,
+        'holding': holding_time_analysis(filtered),
+        'sizes': size_analysis(filtered),
+        'behaviour': behaviour(filtered),
+        'insights': insight_rules.generate(
+            filtered, headline=headline, groups=base.get('groups'),
+            risk=risk, monte=monte),
+        'coverage': insight_rules.coverage(headline),
+    }
+
+
 def history(params):
     """
     The history view, filtered, in one request.
@@ -168,7 +218,7 @@ def history(params):
     window, page = paginate(filtered,
                             limit=int(_one(params, 'limit', 200)),
                             offset=int(_one(params, 'offset', 0)))
-    return {
+    result = {
         'success': True,
         'generated_at': iso(now),
         'requested_window_utc': data['requested_window_utc'],
@@ -178,6 +228,9 @@ def history(params):
         'trades': window,
         **out,
     }
+    if _truthy(_one(params, 'advanced', '')):
+        result.update(_advanced_blocks(filtered, out, params))
+    return result
 
 
 def route(path, params):
