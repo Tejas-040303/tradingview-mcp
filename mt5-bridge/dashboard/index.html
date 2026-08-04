@@ -24,10 +24,12 @@
   </header>
 
   <nav class="tabs">
-    <a class="tab active" href="/dashboard/index.html">Status</a>
-    <a class="tab" href="/dashboard/history.html">History</a>
-    <a class="tab" href="/dashboard/app/">Analytics</a>
+    <a class="tab active" href="#">Status (plain)</a>
+    <a class="tab" href="/">← Back to the dashboard</a>
   </nav>
+  <p class="muted" style="margin:-.5rem 0 1rem">
+    Fallback page — works without the React build. The main dashboard is at <a href="/">/</a>.
+  </p>
 
   <!-- Connection first: everything below is meaningless if this is stale. -->
   <section id="connection" class="strip"></section>

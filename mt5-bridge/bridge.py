@@ -392,7 +392,16 @@ class Handler(BaseHTTPRequestHandler):
         same-origin with the API it reads — no CORS, no proxy, and one fewer
         process for the launcher to manage.
         """
-        rel = '/index.html' if url_path in ('/', '/dashboard', '/dashboard/') else url_path
+        # The root serves the React app when it has been built, and falls back to
+        # the plain page when it has not. That fallback is the point: a failed or
+        # skipped frontend build must leave a working dashboard rather than a
+        # 404, since the bridge and its API are unaffected by it.
+        if url_path in ('/', '/dashboard', '/dashboard/'):
+            rel = ('/app/index.html'
+                   if os.path.isfile(os.path.join(DASHBOARD_DIR, 'app', 'index.html'))
+                   else '/index.html')
+        else:
+            rel = url_path
         rel = rel[len('/dashboard'):] if rel.startswith('/dashboard/') else rel
         target = os.path.normpath(os.path.join(DASHBOARD_DIR, rel.lstrip('/')))
 
