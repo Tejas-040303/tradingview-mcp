@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MT5 History</title>
+  <link rel="stylesheet" href="/dashboard/style.css">
+</head>
+<body>
+  <header>
+    <h1>MT5 History</h1>
+    <div class="controls">
+      <button id="refresh" type="button">Refresh</button>
+      <span id="stamp" class="muted"></span>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <a class="tab" href="/dashboard/index.html">Status</a>
+    <a class="tab active" href="/dashboard/history.html">History</a>
+  </nav>
+
+  <section class="card filters">
+    <div class="filter-row">
+      <label>Period
+        <select id="period">
+          <option value="7">Last 7 days</option>
+          <option value="30" selected>Last 30 days</option>
+          <option value="90">Last 90 days</option>
+          <option value="365">Last year</option>
+          <option value="all">All time</option>
+          <option value="custom">Custom…</option>
+        </select>
+      </label>
+      <label id="from-wrap" hidden>From <input type="date" id="from"></label>
+      <label id="to-wrap" hidden>To <input type="date" id="to"></label>
+
+      <label>Symbol <select id="filter_symbol"><option value="">All</option></select></label>
+      <label>Direction
+        <select id="direction">
+          <option value="">All</option>
+          <option value="long">Long</option>
+          <option value="short">Short</option>
+        </select>
+      </label>
+      <label>Exit <select id="exit_reason"><option value="">All</option></select></label>
+    </div>
+
+    <div class="filter-row">
+      <label>Net ≥ <input type="number" id="min_net" step="0.01" placeholder="any"></label>
+      <label>Net ≤ <input type="number" id="max_net" step="0.01" placeholder="any"></label>
+      <label>Starting balance
+        <input type="number" id="starting_balance" step="0.01" placeholder="for drawdown %">
+      </label>
+      <label class="check"><input type="checkbox" id="closed_only"> Closed only</label>
+      <button id="reset" type="button">Reset</button>
+      <span id="matched" class="muted"></span>
+    </div>
+  </section>
+
+  <section id="stats" class="tiles"></section>
+
+  <section class="card">
+    <h2>Equity curve <span class="muted" id="curve-note"></span></h2>
+    <div id="curve" class="body">loading…</div>
+  </section>
+
+  <div class="grid wide">
+    <section class="card">
+      <h2>By exit reason</h2>
+      <div id="group-exit_reason" class="body">loading…</div>
+    </section>
+    <section class="card">
+      <h2>By session <span class="muted">(entry time, UTC)</span></h2>
+      <div id="group-session" class="body">loading…</div>
+    </section>
+    <section class="card">
+      <h2>By weekday</h2>
+      <div id="group-weekday" class="body">loading…</div>
+    </section>
+    <section class="card">
+      <h2>By symbol</h2>
+      <div id="group-symbol" class="body">loading…</div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>P&amp;L distribution</h2>
+    <div id="distribution" class="body">loading…</div>
+  </section>
+
+  <section class="card">
+    <h2>Trades <span class="muted" id="table-note"></span></h2>
+    <div id="trades" class="body">loading…</div>
+    <div id="pager" class="pager"></div>
+  </section>
+
+  <footer class="muted">
+    Read-only. All times UTC. Open trades are listed but excluded from every statistic.
+  </footer>
+
+  <script src="/dashboard/history.js"></script>
+</body>
+</html>

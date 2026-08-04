@@ -369,6 +369,238 @@ def summarize_trades(trades):
     }
 
 
+TRADE_GROUP_KEYS = ('symbol', 'exit_reason', 'direction', 'session', 'weekday', 'hour')
+
+
+def filter_trades(trades, symbol=None, direction=None, exit_reason=None,
+                  min_net=None, max_net=None, include_open=True):
+    """
+    Narrow a trade list to the slice the history view is asking about.
+
+    Applied over paired trades rather than deals so a filter means what a human
+    means by it: "short trades that hit the stop" is one predicate per trade,
+    not per fill.
+    """
+    out = []
+    for trade in trades or []:
+        if not include_open and trade.get('open'):
+            continue
+        if symbol and trade.get('symbol') != symbol:
+            continue
+        if direction and trade.get('direction') != direction:
+            continue
+        if exit_reason and trade.get('exit_reason') != exit_reason:
+            continue
+        # P&L bounds only apply to closed trades; an open one has no realised
+        # result to compare against and is kept or dropped by include_open.
+        if not trade.get('open'):
+            net = trade.get('net')
+            if min_net is not None and (net is None or net < min_net):
+                continue
+            if max_net is not None and (net is None or net > max_net):
+                continue
+        out.append(trade)
+    return out
+
+
+def _closed_in_order(trades):
+    """Closed trades with a known close time, oldest first."""
+    rows = [t for t in (trades or [])
+            if not t.get('open') and t.get('closed_utc') is not None]
+    rows.sort(key=lambda t: t['closed_utc'])
+    return rows
+
+
+def trade_equity_curve(trades, starting_balance=None):
+    """
+    Cumulative realised P&L per trade, oldest first.
+
+    Ordered by close time, since that is when the money actually moved. One
+    point per trade rather than per fill, so a partial close no longer shows up
+    as two separate steps on the curve.
+    """
+    points, cumulative = [], 0.0
+    for trade in _closed_in_order(trades):
+        cumulative += trade['net']
+        point = {
+            'time_utc': trade['closed_utc'],
+            'time': trade.get('closed'),
+            'profit': round(trade['net'], 2),
+            'cumulative': round(cumulative, 2),
+            'symbol': trade.get('symbol'),
+            'position_id': trade.get('position_id'),
+        }
+        if starting_balance is not None:
+            point['balance'] = round(starting_balance + cumulative, 2)
+        points.append(point)
+    return points
+
+
+def _trade_bucket_stats(trades):
+    nets = [t['net'] for t in trades]
+    wins = [n for n in nets if n > 0]
+    losses = [n for n in nets if n < 0]
+    held = [t['duration_sec'] for t in trades if t.get('duration_sec') is not None]
+    return {
+        'trades': len(trades),
+        'wins': len(wins),
+        'losses': len(losses),
+        'win_rate_pct': round(len(wins) / len(trades) * 100, 1) if trades else None,
+        'net': round(sum(nets), 2),
+        'avg': round(sum(nets) / len(trades), 2) if trades else None,
+        'avg_win': round(sum(wins) / len(wins), 2) if wins else None,
+        'avg_loss': round(sum(losses) / len(losses), 2) if losses else None,
+        'best': round(max(nets), 2) if nets else None,
+        'worst': round(min(nets), 2) if nets else None,
+        'avg_duration_sec': round(sum(held) / len(held)) if held else None,
+        'volume': round(sum(t.get('volume') or 0 for t in trades), 2),
+    }
+
+
+def trade_groups(trades, key='exit_reason'):
+    """
+    Break trade performance down by one dimension.
+
+    Time-based keys use the *entry* time, not the exit: "which session do I lose
+    money in" is a question about when a position was opened. Grouping by exit
+    time would credit a London entry that ran into New York to the wrong bucket.
+    """
+    if key not in TRADE_GROUP_KEYS:
+        raise ValueError(
+            f'Unknown group key {key!r}. Supported: {", ".join(TRADE_GROUP_KEYS)}')
+
+    buckets = {}
+    for trade in trades or []:
+        if trade.get('open'):
+            continue
+        when = trade.get('opened_utc') or trade.get('closed_utc')
+        if key == 'session':
+            label = session_of(when)
+        elif key == 'weekday':
+            label = weekday_of(when)
+        elif key == 'hour':
+            label = (datetime.fromtimestamp(int(when), tz=timezone.utc).hour
+                     if when is not None else None)
+        else:
+            label = trade.get(key)
+        label = 'unknown' if label is None else label
+        buckets.setdefault(label, []).append(trade)
+
+    return {str(label): _trade_bucket_stats(rows)
+            for label, rows in sorted(buckets.items(), key=lambda kv: str(kv[0]))}
+
+
+def trade_streaks(trades):
+    """Longest and current runs of winning and losing trades, by close time."""
+    longest_win = longest_loss = run = 0
+    current_kind = None
+    for trade in _closed_in_order(trades):
+        net = trade['net']
+        kind = 'win' if net > 0 else ('loss' if net < 0 else None)
+        if kind is None:
+            continue
+        run = run + 1 if kind == current_kind else 1
+        current_kind = kind
+        if kind == 'win':
+            longest_win = max(longest_win, run)
+        else:
+            longest_loss = max(longest_loss, run)
+
+    return {
+        'longest_win_streak': longest_win,
+        'longest_loss_streak': longest_loss,
+        'current_streak': run if current_kind else 0,
+        'current_streak_kind': current_kind,
+    }
+
+
+def pnl_distribution(trades, buckets=12):
+    """
+    Histogram of per-trade results.
+
+    Shows the shape a win rate hides: a handful of large losses against many
+    small wins reads as 'mostly green' in a table and as a cliff here. Bucket
+    edges are split at zero so no bar mixes winners with losers.
+    """
+    nets = [t['net'] for t in (trades or []) if not t.get('open')]
+    if not nets:
+        return []
+
+    low, high = min(nets), max(nets)
+    if low == high:
+        return [{'from': round(low, 2), 'to': round(high, 2),
+                 'count': len(nets), 'net': round(sum(nets), 2)}]
+
+    # Split the range at zero so a bucket is never part win, part loss.
+    negative = max(0, -min(low, 0.0))
+    positive = max(0, max(high, 0.0))
+    span = negative + positive
+    loss_buckets = max(1, round(buckets * negative / span)) if negative else 0
+    win_buckets = max(1, buckets - loss_buckets) if positive else 0
+
+    edges = []
+    if loss_buckets:
+        step = negative / loss_buckets
+        edges.extend(low + step * i for i in range(loss_buckets))
+    edges.append(0.0 if (negative and positive) else low)
+    if win_buckets:
+        step = positive / win_buckets
+        edges.extend(step * (i + 1) for i in range(win_buckets))
+    edges = sorted(set(round(e, 6) for e in edges))
+
+    out = []
+    for i in range(len(edges) - 1):
+        start, end = edges[i], edges[i + 1]
+        last = i == len(edges) - 2
+        rows = [n for n in nets if start <= n < end or (last and n == end)]
+        out.append({'from': round(start, 2), 'to': round(end, 2),
+                    'count': len(rows), 'net': round(sum(rows), 2)})
+    return out
+
+
+def analyze_trades(trades, starting_balance=None,
+                   group_by=('exit_reason', 'session', 'symbol')):
+    """
+    Everything the history view needs, computed once over paired trades.
+
+    Deliberately parallel to analyze(), which works on raw deals: that one
+    answers "how did my fills go", this one answers "how did my trades go", and
+    holding times only exist on this side.
+    """
+    closed = [t for t in (trades or []) if not t.get('open')]
+    curve = trade_equity_curve(trades, starting_balance=starting_balance)
+    nets = [t['net'] for t in closed]
+    wins = [n for n in nets if n > 0]
+    losses = [n for n in nets if n < 0]
+    gross_loss = abs(sum(losses))
+
+    headline = summarize_trades(trades) or {}
+    if closed:
+        avg_win = sum(wins) / len(wins) if wins else 0.0
+        avg_loss = sum(losses) / len(losses) if losses else 0.0
+        headline.update({
+            'expectancy': round(sum(nets) / len(closed), 4),
+            'avg_win': round(avg_win, 2) if wins else None,
+            'avg_loss': round(avg_loss, 2) if losses else None,
+            'payoff_ratio': round(avg_win / abs(avg_loss), 2) if wins and losses else None,
+            # Gross win over gross loss. None rather than infinity when nothing
+            # lost — a number that cannot be plotted is worse than an absence.
+            'profit_factor': round(sum(wins) / gross_loss, 2) if gross_loss else None,
+            'best': round(max(nets), 2),
+            'worst': round(min(nets), 2),
+            'volume': round(sum(t.get('volume') or 0 for t in closed), 2),
+        })
+
+    return {
+        'headline': headline or None,
+        'streaks': trade_streaks(trades),
+        'drawdown': max_drawdown(curve),
+        'groups': {key: trade_groups(trades, key) for key in group_by},
+        'distribution': pnl_distribution(trades),
+        'equity_curve': curve,
+    }
+
+
 def period_bounds(now_ts):
     """
     UTC day/week/month boundaries for the P&L strip.
