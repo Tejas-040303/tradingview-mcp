@@ -547,12 +547,18 @@ def pnl_distribution(trades, buckets=12):
         step = positive / win_buckets
         edges.extend(step * (i + 1) for i in range(win_buckets))
     edges = sorted(set(round(e, 6) for e in edges))
+    # Anchor the outer edges to real values: accumulated float error otherwise
+    # leaves the best and worst trades sitting just outside their own buckets.
+    edges[0], edges[-1] = low, high
 
     out = []
     for i in range(len(edges) - 1):
         start, end = edges[i], edges[i + 1]
         last = i == len(edges) - 2
-        rows = [n for n in nets if start <= n < end or (last and n == end)]
+        # Half-open everywhere except the final bucket, which must own its
+        # upper edge or the single best trade belongs to no bucket at all.
+        rows = [n for n in nets
+                if ((start <= n <= end) if last else (start <= n < end))]
         out.append({'from': round(start, 2), 'to': round(end, 2),
                     'count': len(rows), 'net': round(sum(rows), 2)})
     return out
