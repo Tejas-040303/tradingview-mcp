@@ -27,7 +27,8 @@
     "start:all": "node scripts/start.js",
     "status": "node scripts/start.js --status",
     "build:dashboard": "npm --prefix dashboard-app install && npm --prefix dashboard-app run build",
-    "dev:dashboard": "npm --prefix dashboard-app run dev"
+    "dev:dashboard": "npm --prefix dashboard-app run dev",
+    "check:dashboard": "node scripts/check-dashboard-build.mjs"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",

@@ -32,11 +32,42 @@ jobs:
         run: npm run test:unit
 
       - name: MT5 bridge unit tests (Python)
-        # Covers mt5-bridge/normalize.py only — pure logic with no MetaTrader5
-        # import, so it runs on Linux. Terminal I/O in mt5_client.py needs
-        # Windows + a running MT5 and is not exercised here.
+        # Pure logic across normalize / analytics / advanced / insights and the
+        # bridge's own routing, none of which import MetaTrader5, so it all runs
+        # on Linux. Terminal I/O in mt5_client.py needs Windows and a running
+        # MT5, and is not exercised here.
         run: python3 -m unittest discover -s mt5-bridge
 
       - name: Audit (high severity)
         run: npm audit --audit-level=high
         continue-on-error: true
+
+  # Separate job: the dashboard has its own dependency tree, and a frontend
+  # failure should be distinguishable at a glance from a backend one. It also
+  # runs in parallel rather than adding a minute to every matrix leg.
+  dashboard-build:
+    name: Dashboard build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: npm
+          cache-dependency-path: dashboard-app/package-lock.json
+
+      - name: Install dashboard dependencies
+        run: npm ci
+        working-directory: dashboard-app
+
+      - name: Build
+        run: npm run build
+        working-directory: dashboard-app
+
+      - name: Verify the bundle is servable
+        # `vite build` exiting 0 does not mean the page works: a wrong base path
+        # produces asset URLs the bridge never serves, which is a blank page with
+        # console 404s. This resolves every reference the way bridge.py would.
+        run: node scripts/check-dashboard-build.mjs
