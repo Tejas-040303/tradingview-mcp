@@ -154,7 +154,13 @@ export default function App() {
             </Suspense>
 
             <Suspense fallback={<ChartFallback height={240} />}>
-              <Sections data={data} />
+              <Sections
+                data={data}
+                excursionsEnabled={Boolean(filters.excursions)}
+                onEnableExcursions={() =>
+                  setFilters(prev => ({ ...prev, excursions: true }))}
+                isFetching={isFetching}
+              />
             </Suspense>
 
             <TradeTable

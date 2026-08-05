@@ -60,6 +60,9 @@ export function buildQuery(filters) {
     from: String(from),
     to: String(to),
     advanced: 'true',
+    // Excursion needs bar data from the terminal, so it is the one block that
+    // costs real time. Opt in only when its panels are actually being shown.
+    ...(filters.excursions ? { excursions: 'true' } : {}),
     limit: String(filters.limit ?? 100),
     offset: String(filters.offset ?? 0),
   });

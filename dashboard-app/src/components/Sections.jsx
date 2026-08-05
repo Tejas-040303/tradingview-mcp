@@ -1,12 +1,17 @@
+import Excursion from '@/components/Excursion';
 import { CalendarHeatmap, Heatmaps } from '@/components/Grids';
 import {
   BehaviourPanel, ExitAnalysis, MonthlyReport, SessionCards, SymbolCards, WeekdayBars,
 } from '@/components/Breakdowns';
 
 /** Everything below the equity chart, lazy-loaded as one chunk. */
-export default function Sections({ data }) {
+export default function Sections({ data, excursionsEnabled, onEnableExcursions,
+  isFetching }) {
   return (
     <>
+      <Excursion data={data.excursions} enabled={excursionsEnabled}
+        onEnable={onEnableExcursions} isFetching={isFetching} />
+
       <CalendarHeatmap daily={data.daily} />
       <MonthlyReport daily={data.daily} />
       <SessionCards groups={data.groups} />

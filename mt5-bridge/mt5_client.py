@@ -314,6 +314,36 @@ def bars(symbol, timeframe='5', count=100, summary=False):
     return out
 
 
+def orders_history(from_ts, to_ts, symbol=None, limit=100000):
+    """
+    Historical orders, which — unlike deals — carry `sl` and `tp`.
+
+    This is the only route to the stop distance a trade was opened with, and so
+    the only route to R-multiples without manual journalling. Whether the field
+    is actually populated depends on the broker and on how the stop was
+    attached, which is what stops.coverage() measures.
+
+    Bounds are shifted onto the server clock for the same reason as everywhere
+    else: MT5 interprets them there, and a UTC window passed through unshifted
+    silently loses the orders at each edge.
+    """
+    mt5 = _mt5_module()
+    connect()
+    clock = server_utc_offset()
+    shift = clock['offset_sec'] or 0
+
+    start = datetime.fromtimestamp(int(from_ts) + shift, tz=timezone.utc)
+    end = datetime.fromtimestamp(int(to_ts) + shift, tz=timezone.utc)
+    raw = (mt5.history_orders_get(start, end, group=symbol) if symbol
+           else mt5.history_orders_get(start, end))
+    rows = [_as_dict(o) for o in (raw or [])][:limit]
+
+    for row in rows:
+        decode_enums(row, {'type': ORDER_TYPE})
+        row.update(time_fields(row.pop('time_setup', None), clock['offset_sec']))
+    return rows
+
+
 def bars_range(symbol, from_ts, to_ts, timeframe='1'):
     """
     Every bar in a UTC window, for excursion analysis.
