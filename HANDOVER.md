@@ -251,6 +251,7 @@ mt5-bridge/             Python, stdlib only
   simulate.py           Pure: bar replay, emitting the pair_trades() shape
   sweep.py              Pure: parameter grids with walk-forward validation
   reconcile.py          Pure: signals vs fills — followed, missed, discretionary
+  paper.py              Pure: live view, dropping the bar still forming
   dashboard/            Plain HTML fallback pages + built React bundle (app/)
 dashboard-app/          React source (Vite + Tailwind + Recharts + TanStack)
 scripts/start.js        One-command launcher
@@ -260,7 +261,7 @@ scripts/start.js        One-command launcher
 is testable without a terminal. Every `mt5-bridge/*.py` module except
 `mt5_client.py` imports nothing platform-specific and runs on Linux in CI.
 
-**Test counts:** 459 Python, 22 Node MT5, plus the wider Node suite. CI runs
+**Test counts:** 483 Python, 22 Node MT5, plus the wider Node suite. CI runs
 lint, both suites, and a dashboard build that verifies the bundle is actually
 servable — a wrong `base` path builds cleanly and produces a blank page.
 
@@ -273,6 +274,12 @@ servable — a wrong `base` path builds cleanly and produces a blank page.
 - **The bridge answers 503 when MT5 is unreachable.** The launcher treats *any*
   HTTP response as "up" — an earlier version used `res.ok` and reported a
   working bridge as down, then waited for it forever.
+- **MT5 returns the forming bar as the last row of `copy_rates_from_pos`.** It
+  looks exactly like a finished candle and its high, low and close keep
+  changing. `paper.closed_bars` drops it; anything reading live bars must do
+  the same, or signals appear and vanish as the minute progresses. A machine
+  clock running *fast* is the dangerous skew — it keeps a bar that has not
+  closed. A slow clock merely drops one that had.
 - **`$env:` variables die with the PowerShell window.** Hence calendar
   autodiscovery rather than a required `MT5_CALENDAR_FILE`.
 - **Symbol names are not guessable.** Spot gold is `GOLD.i#` on XM; `XAUUSD` may

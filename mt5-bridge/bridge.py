@@ -25,6 +25,7 @@ from urllib.parse import urlparse, parse_qs
 
 import mt5_client
 import excursion
+import paper
 import reconcile
 import simulate
 import strategy
@@ -527,6 +528,25 @@ def route(path, params):
             result['skipped'] = out['skipped']
         return result
 
+    if path == '/paper':
+        # What the strategy would be doing right now. Recomputed from bars on
+        # every call, so a restart changes nothing and two callers agree.
+        symbol, config, data = _strategy_bars(params)
+        timeframe = _one(params, 'timeframe', '5')
+        return paper.status(
+            data['bars'], symbol, config,
+            balance=float(_one(params, 'balance', 1000)),
+            # Bars arrive with time_utc already resolved off the broker clock,
+            # so genuine UTC is the right comparison and the local epoch is
+            # that. Skew is not symmetric: a slow clock merely drops a bar that
+            # had closed, while a fast one keeps a bar still forming, which is
+            # the failure this whole module exists to prevent. paper.status
+            # reports the boundary it used so that can be checked.
+            now=int(time.time()),
+            timeframe=timeframe,
+            recent=int(_one(params, 'recent', 5)),
+        )
+
     if path == '/reconcile':
         # What the strategy called, against what the account actually did.
         # MT5 records only trades that were taken, so the setups you passed on
@@ -762,7 +782,7 @@ def main():
 
     server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
     print(f'Read-only bridge listening on http://127.0.0.1:{args.port}')
-    print('Routes: /overview /history /excursions /diagnose/stops /setups /backtest /sweep /reconcile /health'
+    print('Routes: /overview /history /excursions /diagnose/stops /setups /backtest /sweep /paper /reconcile /health'
           ' /account /symbols /positions /orders /quote /bars /deals /trades'
           ' /analytics /calendar /blackout')
     try:
