@@ -481,6 +481,7 @@ baked into a branch.
 |-------|-----------------|
 | `/setups?symbol=GOLD.i%23` | Every entry signal in the window, with timestamps, levels and which conditions fired. **No P&L.** This is the checkpoint: pull a few up on a chart and see whether they are setups you would take |
 | `/backtest?symbol=GOLD.i%23` | The same signals replayed with stops, targets, partials and the breakeven trail, summarised as expectancy, win rate and average R |
+| `/sweep?symbol=GOLD.i%23` | Every parameter combination run on both halves of the window — the first 70% chooses, the last 30% judges |
 
 Both accept `conditions=fvg,liquidity_sweep`, `required=`, `mode=any|all|at_least`,
 `confirmation=close_beyond|engulfing|rejection`, `buffer_pips=`, `risk_pct=`,
@@ -502,6 +503,19 @@ broken:
 
 Simulated trades come out in exactly the shape `mt5_trades` produces, so they
 flow through the existing analytics and dashboards with no second code path.
+
+`/sweep` is built to resist a conclusion rather than produce one. Thirty
+configurations always have a best one — thirty coin-flipping strategies do too
+— so it reports the median alongside the winner, the rank correlation between
+the two halves, and the in-sample-to-out-of-sample gap that measures fitting.
+It refuses to call a result trustworthy unless the winner is actually
+profitable out of sample, the ordering survives the split, *and* the winner is
+clear of the median. On a random walk it correctly declines to endorse
+anything, even though the rank correlation there is a healthy 0.55 —
+management parameters reorder the R distribution the same way in any window,
+which looks like signal and is not.
+
+Axes are set from the URL: `axes=manage.trail_to_be_at_r:0.5,1.0,none|target.r:2,3`.
 
 Setup, routes, and the full timestamp contract: **[mt5-bridge/README.md](mt5-bridge/README.md)**.
 

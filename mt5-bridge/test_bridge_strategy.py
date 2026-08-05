@@ -9,7 +9,7 @@ the control case from the experiment.
 """
 import unittest
 
-from bridge import _strategy_config
+from bridge import _axis_value, _strategy_config
 from strategy import DEFAULT_CONFIG, merged, validate
 
 
@@ -79,6 +79,28 @@ class TestNumbers(unittest.TestCase):
         # risk above the cap would refuse every trade and report zero setups
         # traded, which looks like "the strategy found nothing".
         self.assertTrue(validate(_strategy_config(q(risk_pct=5, max_risk_pct=2))))
+
+
+class TestAxisValues(unittest.TestCase):
+    """Sweep axes are parsed from a URL, and 'none' is the control case."""
+
+    def test_none_survives_as_null(self):
+        self.assertIsNone(_axis_value('none'))
+        self.assertIsNone(_axis_value('off'))
+        self.assertIsNone(_axis_value(' NULL '))
+
+    def test_numbers_keep_their_type(self):
+        self.assertEqual(_axis_value('50'), 50)
+        self.assertEqual(_axis_value('1.5'), 1.5)
+        self.assertIsInstance(_axis_value('50'), int)
+
+    def test_booleans_are_recognised(self):
+        # entry.conditions.fvg.on takes true/false, not 1/0.
+        self.assertIs(_axis_value('true'), True)
+        self.assertIs(_axis_value('false'), False)
+
+    def test_anything_else_stays_a_string(self):
+        self.assertEqual(_axis_value('close_beyond'), 'close_beyond')
 
 
 if __name__ == '__main__':
