@@ -94,7 +94,7 @@ function StopSizePanel({ stopSize }) {
   if (!stopSize) return null;
   const { survival, atr, by_symbol: bySymbol, verdict, too_tight: tooTight } = stopSize;
 
-  const tone = tooTight === true ? 'border-l-warn'
+  const tone = tooTight === true || tooTight === 'inconsistent' ? 'border-l-warn'
     : tooTight === false ? 'border-l-up' : 'border-l-line';
 
   return (
@@ -115,6 +115,7 @@ function StopSizePanel({ stopSize }) {
               tone="text-down" note="realised, on those trades" />
             <Metric label="Typical stop in ATR"
               value={atr ? `${num(atr.median_stop_in_atr, 2)}×` : '—'}
+              tone={atr && atr.median_stop_in_atr <= 1.5 ? 'text-warn' : 'text-ink'}
               note={atr ? `${atr.samples} stop-outs · ${atr.period}-bar` : 'no bar coverage'} />
           </div>
 
@@ -154,7 +155,7 @@ function StopSizePanel({ stopSize }) {
       )}
 
       <p className={cn('mt-3 max-w-3xl text-xs leading-relaxed',
-        tooTight === true ? 'text-warn' : 'text-muted')}>
+        tooTight === true || tooTight === 'inconsistent' ? 'text-warn' : 'text-muted')}>
         {verdict}
       </p>
     </Card>
@@ -199,7 +200,7 @@ function ShakeoutPanel({ summary, analysed, unavailable }) {
               <th className="px-2 py-1.5 text-right font-medium">n</th>
               <th className="px-2 py-1.5 text-right font-medium">avg MAE</th>
               <th className="px-2 py-1.5 text-right font-medium">avg MFE</th>
-              <th className="px-2 py-1.5 text-right font-medium">capture</th>
+              <th className="px-2 py-1.5 text-right font-medium">capture (med)</th>
               {horizons.map(h => (
                 <th key={h} className="px-2 py-1.5 text-right font-medium">
                   back @ {h / 60}m
@@ -217,9 +218,18 @@ function ShakeoutPanel({ summary, analysed, unavailable }) {
                   {!b.reliable && <span className="ml-1.5 text-warn">thin</span>}
                 </td>
                 <td className="px-2 py-1.5 text-right">{b.trades}</td>
-                <td className="px-2 py-1.5 text-right text-down">{num(b.avg_mae, 2)}</td>
-                <td className="px-2 py-1.5 text-right text-up">{num(b.avg_mfe, 2)}</td>
-                <td className="px-2 py-1.5 text-right">{num(b.avg_capture_ratio, 2)}</td>
+                <td className="px-2 py-1.5 text-right text-down">
+                  {b.avg_mae === null ? (
+                    <Tip content={b.price_stats_note}>
+                      <span className="cursor-help text-muted">mixed</span>
+                    </Tip>
+                  ) : num(b.avg_mae, 2)}
+                </td>
+                <td className="px-2 py-1.5 text-right text-up">
+                  {b.avg_mfe === null
+                    ? <span className="text-muted">mixed</span> : num(b.avg_mfe, 2)}
+                </td>
+                <td className="px-2 py-1.5 text-right">{num(b.median_capture_ratio, 2)}</td>
                 {horizons.map(h => {
                   const post = b[`post_${h}`];
                   const value = post?.reached_entry_pct;
@@ -255,7 +265,10 @@ function ShakeoutPanel({ summary, analysed, unavailable }) {
  */
 function Interpretation({ summary }) {
   const stop = summary.by_exit_reason?.stop_loss;
-  const short = summary.horizons?.[0];
+  // Read at the horizon that matches how long positions are actually held.
+  // Fixed at five minutes, a fifteen-minute style reports a far lower shakeout
+  // rate than it experiences and the verdict lands one band too low.
+  const short = summary.relevant_horizon ?? summary.horizons?.[0];
   if (!stop || !short) return null;
 
   const post = stop[`post_${short}`];

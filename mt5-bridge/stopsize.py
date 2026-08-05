@@ -196,25 +196,47 @@ def atr_context(trades, bars_by_symbol, period=ATR_PERIOD):
     }
 
 
-def _verdict(stops, survival, atr_stats):
+def _verdict(stops, survival, atr_stats, spread=None):
     """
     One sentence, and only when the evidence supports one.
 
-    The survival test leads because it is the assumption-free measure. ATR is
-    quoted alongside it, never on its own.
+    Order matters. Inconsistent stop placement is checked first because it is a
+    fact about the stops themselves — it needs no winners to establish, and it
+    outranks the survival percentage: a stop that ranges over an order of
+    magnitude is not a rule with variance, it is the absence of a rule, and no
+    backtest can express one.
     """
+    atr_note = (f' The typical stop is {atr_stats["median_stop_in_atr"]}x the '
+                f'average bar range before entry.' if atr_stats else '')
+
+    if spread and spread['ratio'] >= 5:
+        # The survival test compares every winner against a single median stop,
+        # which is weak evidence when no such stop meaningfully exists. Quote it
+        # only to say so.
+        rate = (survival or {}).get('would_have_been_stopped_pct')
+        caveat = (f' The survival figure below ({rate:.0f}%) compares winners '
+                  f'against one median stop, so read it as under-powered rather '
+                  f'than reassuring.' if rate is not None else '')
+        return {
+            'too_tight': 'inconsistent',
+            'verdict': (
+                f'Stop placement varies too much to judge as a single rule: on '
+                f'{spread["symbol"]} the middle half of your stops span '
+                f'{spread["p25"]:g} to {spread["p75"]:g}, a {spread["ratio"]:.0f}x '
+                f'range.{caveat} Before anything can be backtested, where the '
+                f'stop goes needs an answer.{atr_note}'),
+        }
+
     if not survival or not survival['reliable']:
         n = (survival or {}).get('winners_examined', 0)
         return {
             'too_tight': None,
             'verdict': (f'Only {n} winning trades could be compared against an '
                         f'observed stop distance — not enough to judge. A wider '
-                        f'window (from=0) will usually fix this.'),
+                        f'window (from=0) will usually fix this.{atr_note}'),
         }
 
     rate = survival['would_have_been_stopped_pct']
-    atr_note = (f' The typical stop is {atr_stats["median_stop_in_atr"]}x the '
-                f'average bar range before entry.' if atr_stats else '')
 
     if rate >= 40:
         return {
@@ -246,15 +268,37 @@ def _verdict(stops, survival, atr_stats):
     }
 
 
+def widest_spread(stops):
+    """
+    The symbol whose stop placement varies most, among those with enough data.
+
+    Reported because consistency is a precondition for everything downstream: a
+    stop that ranges over an order of magnitude is not a rule with variance, it
+    is the absence of a rule, and no backtest can express it.
+    """
+    worst = None
+    for symbol, stats in (stops or {}).items():
+        if not stats.get('reliable') or not stats.get('p25'):
+            continue
+        ratio = stats['p75'] / stats['p25']
+        if worst is None or ratio > worst['ratio']:
+            worst = {'symbol': symbol, 'ratio': round(ratio, 1),
+                     'p25': stats['p25'], 'p75': stats['p75'],
+                     'median': stats['median_distance']}
+    return worst
+
+
 def analyze(trades, excursion_rows, bars_by_symbol=None, period=ATR_PERIOD):
     """Everything the stop-distance question needs, in one pass."""
     stops = observed_stops(trades)
     survival = survival_test(excursion_rows, stops)
     atr_stats = atr_context(trades, bars_by_symbol, period=period)
+    spread = widest_spread(stops)
     return {
         'by_symbol': stops,
         'survival': survival,
         'atr': atr_stats,
+        'spread': spread,
         'min_reliable': MIN_STOPS,
-        **_verdict(stops, survival, atr_stats),
+        **_verdict(stops, survival, atr_stats, spread),
     }
