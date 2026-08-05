@@ -113,6 +113,7 @@ def excursion_for_trade(trade, bars, times=None, horizons=DEFAULT_HORIZONS):
         'entry_price': entry,
         'exit_price': exit_price,
         'closed_utc': closed,
+        'duration_sec': closed - opened,
         'bars_during': len(during),
         'mae': round(mae, 5),
         'mfe': round(mfe, 5),
@@ -208,6 +209,16 @@ def _mean(values):
     return sum(values) / len(values) if values else None
 
 
+def _median(values):
+    if not values:
+        return None
+    ordered = sorted(values)
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return ordered[mid]
+    return (ordered[mid - 1] + ordered[mid]) / 2
+
+
 def summarize(rows, horizons=DEFAULT_HORIZONS):
     """
     Aggregate excursions, split by how the trade ended.
@@ -223,14 +234,36 @@ def summarize(rows, horizons=DEFAULT_HORIZONS):
     def bucket(subset):
         if not subset:
             return None
+        symbols = {r.get('symbol') for r in subset}
         stats = {
             'trades': len(subset),
-            'avg_mae': round(_mean([r['mae'] for r in subset]), 5),
-            'avg_mfe': round(_mean([r['mfe'] for r in subset]), 5),
+            'symbols': len(symbols),
             'reliable': len(subset) >= MIN_RELIABLE,
         }
+
+        # MAE and MFE are prices. Averaging them across instruments adds gold
+        # points to bitcoin dollars and produces a number with no unit — on a
+        # real account that read as an alarming 17.2 "average" adverse
+        # excursion, which was purely an artefact of the mix. Percentages and
+        # ratios are dimensionless and survive aggregation; these do not, so
+        # they are withheld rather than reported wrong.
+        if len(symbols) == 1:
+            stats['avg_mae'] = round(_mean([r['mae'] for r in subset]), 5)
+            stats['avg_mfe'] = round(_mean([r['mfe'] for r in subset]), 5)
+            stats['median_mae'] = round(_median([r['mae'] for r in subset]), 5)
+            stats['median_mfe'] = round(_median([r['mfe'] for r in subset]), 5)
+        else:
+            stats['avg_mae'] = stats['avg_mfe'] = None
+            stats['median_mae'] = stats['median_mfe'] = None
+            stats['price_stats_note'] = (
+                f'withheld — {len(symbols)} instruments in this bucket, and a '
+                f'price distance cannot be averaged across them')
+
+        # Median, not mean: capture is a ratio, and one trade that offered 0.01
+        # and lost 5 contributes -500 to an average. The mean read -5.9 on real
+        # data purely from a handful of those.
         captures = [r['capture_ratio'] for r in subset if r['capture_ratio'] is not None]
-        stats['avg_capture_ratio'] = round(_mean(captures), 3) if captures else None
+        stats['median_capture_ratio'] = round(_median(captures), 3) if captures else None
 
         for horizon in horizons:
             key = str(horizon)
@@ -262,15 +295,30 @@ def summarize(rows, horizons=DEFAULT_HORIZONS):
                                       if returns else None)
         return stats
 
-    by_reason = {}
+    by_reason, by_symbol = {}, {}
     for row in rows:
         by_reason.setdefault(row.get('exit_reason') or 'unknown', []).append(row)
+        by_symbol.setdefault(row.get('symbol') or 'unknown', []).append(row)
+
+    # Which horizon to read the shakeout rate at depends on how long positions
+    # are actually held: for a fifteen-minute style, "did price come back within
+    # five minutes" understates the shakeout and answers a question nobody asked.
+    held = [r['duration_sec'] for r in rows if r.get('duration_sec')]
+    median_hold = _median(held)
+    relevant = (min(horizons, key=lambda h: abs(h - median_hold))
+                if median_hold else horizons[0])
 
     return {
         'overall': bucket(rows),
         'by_exit_reason': {name: bucket(subset)
                            for name, subset in sorted(by_reason.items())},
+        # Price-unit statistics are only meaningful here, where the instrument
+        # is fixed.
+        'by_symbol': {name: bucket(subset)
+                      for name, subset in sorted(by_symbol.items())},
         'horizons': list(horizons),
+        'median_hold_sec': round(median_hold) if median_hold else None,
+        'relevant_horizon': relevant,
         'min_reliable': MIN_RELIABLE,
     }
 

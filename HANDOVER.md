@@ -99,6 +99,31 @@ it swallow everything, counting 13 of 7 trades. The same test caught both.
 half-open comparison everywhere except the final bucket. Tests assert every
 trade lands in exactly one bucket.
 
+### Three ways an aggregate lied
+
+All three surfaced on the same real-account run, and all three produced numbers
+that looked authoritative and meant nothing.
+
+**Price distances averaged across instruments.** `avg_mae` came back as 12.69 —
+an average of gold points and bitcoin dollars. The account trades eight symbols
+whose stop distances span 0.00044 to 145. Percentages and ratios are
+dimensionless and survive aggregation; prices do not. Cross-symbol buckets now
+withhold price statistics with a note, and `by_symbol` exists so they can be
+read where the instrument is fixed.
+
+**A mean of ratios.** `capture_ratio` is `realised / mfe`, so a trade offering
+0.01 that lost 5 contributes −500. The mean read −5.9; the median read 0.5. Any
+ratio aggregated across trades is a median here.
+
+**A verdict read at the wrong horizon.** The shakeout rate was hardcoded to the
+five-minute figure while the account holds for fifteen. It reported 37% and
+called the result "partial" when the fifteen-minute figure was 57% and the
+hourly 77%. The horizon now follows the median holding time.
+
+A fourth, related: the inconsistency finding was gated behind the survival
+sample. It is a fact about the stops, needs no winners, and was being hidden
+exactly when there were too few winners to say anything else.
+
 ### The broker clock
 
 MT5 reports every timestamp on the **server clock**, not UTC. On XM that is

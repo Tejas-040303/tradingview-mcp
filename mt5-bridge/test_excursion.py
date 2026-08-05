@@ -152,6 +152,73 @@ class TestPostExit(unittest.TestCase):
         self.assertEqual(row['returned_to_entry_sec'], MINUTE)
 
 
+class TestUnitSafety(unittest.TestCase):
+    """Price distances must not be averaged across instruments."""
+
+    def _mixed(self):
+        gold = excursion_for_trade(
+            trade(position_id=1, symbol='GOLD.i#', entry=4000.0,
+                  exit_price=4010.0, closed=MONDAY),
+            [bar(MONDAY, 4000, 4020, 3990, 4010)])
+        btc = excursion_for_trade(
+            trade(position_id=2, symbol='BTCUSD#', entry=90000.0,
+                  exit_price=90500.0, closed=MONDAY),
+            [bar(MONDAY, 90000, 91000, 89000, 90500)])
+        return [gold, btc]
+
+    def test_price_stats_are_withheld_when_symbols_are_mixed(self):
+        # Averaging gold points with bitcoin dollars produced a 17.2 "average"
+        # adverse excursion on a real account — a number with no unit.
+        overall = summarize(self._mixed())['overall']
+        self.assertIsNone(overall['avg_mae'])
+        self.assertIsNone(overall['avg_mfe'])
+        self.assertEqual(overall['symbols'], 2)
+        self.assertIn('cannot be averaged', overall['price_stats_note'])
+
+    def test_per_symbol_buckets_keep_their_price_stats(self):
+        out = summarize(self._mixed())['by_symbol']
+        self.assertEqual(set(out), {'GOLD.i#', 'BTCUSD#'})
+        self.assertIsNotNone(out['GOLD.i#']['avg_mae'])
+        self.assertIsNotNone(out['BTCUSD#']['avg_mae'])
+        self.assertNotIn('price_stats_note', out['GOLD.i#'])
+
+    def test_capture_ratio_uses_a_median_not_a_mean(self):
+        # A trade that offered almost nothing and lost contributes an enormous
+        # negative ratio. The mean read -5.9 on real data purely from those.
+        rows = []
+        for i in range(1, 10):
+            rows.append(excursion_for_trade(
+                trade(position_id=i, entry=4000.0, exit_price=4010.0,
+                      closed=MONDAY, opened=MONDAY),
+                [bar(MONDAY, 4000, 4020, 4000, 4010)]))
+        rows.append(excursion_for_trade(
+            trade(position_id=99, entry=4000.0, exit_price=3995.0, closed=MONDAY,
+                  net=-5.0),
+            [bar(MONDAY, 4000, 4000.01, 3990, 3995)]))
+        stats = summarize(rows)['overall']
+        # Nine trades captured 0.5; one outlier is around -500. The median holds.
+        self.assertEqual(stats['median_capture_ratio'], 0.5)
+
+
+class TestRelevantHorizon(unittest.TestCase):
+    def test_horizon_follows_the_median_holding_time(self):
+        # A fifteen-minute style should be read at the fifteen-minute horizon;
+        # asking "did price come back within five" understates the shakeout.
+        rows = [excursion_for_trade(
+            trade(position_id=i, closed=MONDAY + 15 * MINUTE,
+                  opened=MONDAY + (i - 1) * 3600),
+            [bar(MONDAY + (i - 1) * 3600, 4000, 4020, 3990, 4010)])
+            for i in range(1, 3)]
+        rows = [r for r in rows if r]
+        out = summarize(rows)
+        self.assertEqual(out['relevant_horizon'], 900)
+
+    def test_falls_back_to_the_shortest_horizon_without_durations(self):
+        row = excursion_for_trade(trade(closed=MONDAY, opened=MONDAY),
+                                  [bar(MONDAY, 4000, 4020, 3990, 4010)])
+        self.assertEqual(summarize([row])['relevant_horizon'], 300)
+
+
 class TestRefusals(unittest.TestCase):
     def test_open_trades_produce_nothing(self):
         self.assertIsNone(excursion_for_trade(trade(is_open=True),

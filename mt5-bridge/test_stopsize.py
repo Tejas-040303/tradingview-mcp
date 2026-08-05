@@ -8,7 +8,7 @@ entry it is meant to characterise.
 import unittest
 
 from stopsize import (ATR_PERIOD, MIN_STOPS, analyze, atr, atr_before,
-                      observed_stops, survival_test, true_range)
+                      observed_stops, survival_test, true_range, widest_spread)
 
 MINUTE = 60
 MONDAY = 1_767_571_200
@@ -177,6 +177,41 @@ class TestAnalyze(unittest.TestCase):
         out = self._case(winner_mae=5.0)
         self.assertIsNone(out['atr'])
         self.assertTrue(out['too_tight'])
+
+    def test_wildly_variable_stops_are_called_out_instead_of_scored(self):
+        # A stop ranging 0.23 to 4.57 on one instrument is not a rule with
+        # variance; it is the absence of a rule, and the survival test against a
+        # single median is weak evidence rather than reassurance.
+        trades = [trade(i, entry=4000.0, exit_price=4000.0 - d,
+                        opened=MONDAY + i * 60)
+                  for i, d in enumerate([0.2] * 8 + [5.0] * 8, start=1)]
+        out = analyze(trades, [row(mae=0.1, net=5.0) for _ in range(MIN_STOPS)])
+        self.assertEqual(out['too_tight'], 'inconsistent')
+        self.assertIn('varies too much', out['verdict'])
+        self.assertGreaterEqual(out['spread']['ratio'], 5)
+
+    def test_inconsistency_is_reported_even_without_enough_winners(self):
+        # It is a fact about the stops, not about the winners. Suppressing it
+        # behind the survival sample would hide the more important finding
+        # exactly when the account has too few winners to say anything else.
+        trades = [trade(i, entry=4000.0, exit_price=4000.0 - d,
+                        opened=MONDAY + i * 60)
+                  for i, d in enumerate([0.2] * 8 + [5.0] * 8, start=1)]
+        out = analyze(trades, [])          # no excursion rows at all
+        self.assertEqual(out['too_tight'], 'inconsistent')
+        self.assertNotIn('survival figure', out['verdict'])
+
+    def test_consistent_stops_leave_the_normal_verdict_alone(self):
+        trades = [trade(i, entry=4000.0, exit_price=3998.0, opened=MONDAY + i * 60)
+                  for i in range(1, MIN_STOPS + 6)]
+        out = analyze(trades, [row(mae=5.0, net=5.0) for _ in range(MIN_STOPS)])
+        self.assertTrue(out['too_tight'])
+
+    def test_spread_ignores_symbols_without_enough_stops(self):
+        trades = ([trade(i, entry=4000.0, exit_price=3998.0, opened=MONDAY + i * 60)
+                   for i in range(1, MIN_STOPS + 1)]
+                  + [trade(99, symbol='OILCash#', entry=75.0, exit_price=70.0)])
+        self.assertEqual(widest_spread(observed_stops(trades))['symbol'], 'GOLD.i#')
 
     def test_tolerates_empty_input(self):
         out = analyze([], [])
