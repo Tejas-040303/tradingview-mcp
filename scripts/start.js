@@ -349,8 +349,9 @@ function printEndpoints(state) {
   console.log(`    TradingView    ${state.tv ? `${cdp}/json/version` : dim(`${cdp}/json/version (down)`)}`);
   console.log('');
   console.log('  Bridge routes');
-  console.log(dim('    /overview  /history  /health  /account  /symbols  /positions'));
-  console.log(dim('    /orders  /quote  /bars  /deals  /trades  /analytics  /calendar  /blackout'));
+  console.log(dim('    /overview  /history  /excursions  /health  /account  /symbols'));
+  console.log(dim('    /positions  /orders  /quote  /bars  /deals  /trades'));
+  console.log(dim('    /analytics  /calendar  /blackout'));
   console.log('');
   console.log('  Logs');
   console.log(dim(`    ${join(LOG_DIR, 'bridge.log')}`));

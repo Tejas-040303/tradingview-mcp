@@ -314,6 +314,43 @@ def bars(symbol, timeframe='5', count=100, summary=False):
     return out
 
 
+def bars_range(symbol, from_ts, to_ts, timeframe='1'):
+    """
+    Every bar in a UTC window, for excursion analysis.
+
+    copy_rates_range rather than copy_rates_from_pos: excursion needs the bars
+    that surround each trade, which sit at an arbitrary point in history rather
+    than at the end of it. One call per symbol covering every trade beats one
+    call per trade by two orders of magnitude on a few hundred trades.
+
+    Like history_deals_get, the bounds are interpreted on the *server* clock, so
+    the UTC window is shifted before querying — otherwise the range is wrong by
+    the broker offset and the trades at each edge silently lose their bars.
+    """
+    mt5 = _mt5_module()
+    connect()
+    clock = server_utc_offset()
+    shift = clock['offset_sec'] or 0
+    tf_const = getattr(mt5, resolve_timeframe(timeframe))
+
+    if not mt5.symbol_select(symbol, True):
+        raise Mt5Error(f'Symbol {symbol!r} not available: {_last_error(mt5)}')
+
+    start = datetime.fromtimestamp(int(from_ts) + shift, tz=timezone.utc)
+    end = datetime.fromtimestamp(int(to_ts) + shift, tz=timezone.utc)
+    rates = mt5.copy_rates_range(symbol, tf_const, start, end)
+    if rates is None:
+        raise Mt5Error(f'No rates for {symbol!r} in that window: {_last_error(mt5)}')
+
+    return [{
+        **time_fields(int(r['time']), clock['offset_sec']),
+        'open': float(r['open']),
+        'high': float(r['high']),
+        'low': float(r['low']),
+        'close': float(r['close']),
+    } for r in rates]
+
+
 def deals(from_ts, to_ts, symbol=None, limit=100, offset=0, summary=False):
     """
     Closed deals in a window — the fill history a trade journal reconciles

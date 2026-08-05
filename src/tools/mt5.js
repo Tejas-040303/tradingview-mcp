@@ -122,6 +122,20 @@ export function registerMt5Tools(server) {
   );
 
   server.tool(
+    'mt5_excursions',
+    'What price did during each trade and after you left it: maximum adverse and favourable excursion, how much of the available move you captured, and — for losing exits only — whether price came back to your entry within 5, 15 or 60 minutes. That last figure is the direct test of "my stop sat inside normal noise" versus "my entries were wrong", which the exit distribution alone cannot separate. Needs bar history, so it is slower than the other tools; returns a summary by default.',
+    {
+      from: z.coerce.number().optional().describe('Window start, unix seconds UTC (default 30 days ago)'),
+      to: z.coerce.number().optional().describe('Window end, unix seconds UTC (default now)'),
+      symbol: z.string().optional().describe('Narrow to one symbol'),
+      timeframe: z.string().optional().describe('Bar timeframe for the analysis (default "1" — one minute)'),
+      summary: z.coerce.boolean().optional().describe('Summary only, no per-trade rows (default true)'),
+    },
+    guard(({ from, to, symbol, timeframe, summary }) =>
+      core.excursions({ from, to, symbol, timeframe, summary: summary !== false })),
+  );
+
+  server.tool(
     'mt5_analytics',
     'Deep analysis of closed trade history: expectancy, payoff ratio, win/loss streaks, max drawdown, and performance broken down by exit reason, session, symbol, weekday or hour. Answers "when do I lose money" rather than just "how much". Pass starting_balance to get drawdown as a percentage.',
     {

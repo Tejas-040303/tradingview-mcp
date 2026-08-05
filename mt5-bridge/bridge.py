@@ -24,6 +24,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 import mt5_client
+import excursion
 import insights as insight_rules
 from advanced import (behaviour, daily_pnl, heatmap, holding_time_analysis,
                       kelly_fraction, monte_carlo, recovery_factor,
@@ -125,6 +126,43 @@ def _number(params, key):
 DEFAULT_HEATMAPS = ('weekday:session', 'hour:direction', 'weekday:symbol')
 
 
+def excursions(trades, timeframe='1'):
+    """
+    MAE, MFE and post-exit behaviour, fetched one window per symbol.
+
+    Separated from the rest of the advanced blocks because it is the only one
+    that goes back to the terminal for more data — everything else works on
+    deals already in hand. It is also the only one that can be slow, and the one
+    most likely to fail on its own (a symbol delisted, history not downloaded),
+    so it reports its failure rather than taking the whole response down.
+    """
+    windows = excursion.required_window(trades)
+    if not windows:
+        return {'success': True, 'rows': [], 'summary': None, 'symbols': {}}
+
+    bars_by_symbol = {}
+    problems = {}
+    for symbol, (start, end) in windows.items():
+        try:
+            bars_by_symbol[symbol] = mt5_client.bars_range(symbol, start, end,
+                                                           timeframe=timeframe)
+        except Mt5Error as exc:
+            problems[symbol] = str(exc)
+
+    rows = excursion.compute(trades, bars_by_symbol)
+    return {
+        'success': True,
+        'timeframe': str(timeframe),
+        'symbols': {s: len(b) for s, b in bars_by_symbol.items()},
+        'unavailable': problems or None,
+        # The per-trade rows are large; the summary is the point. Callers that
+        # want the detail ask for it.
+        'summary': excursion.summarize(rows),
+        'analysed': len(rows),
+        'rows': rows,
+    }
+
+
 def _advanced_blocks(filtered, base, params):
     """
     The inference layer: risk-adjusted returns, grids, behaviour and coaching.
@@ -145,7 +183,7 @@ def _advanced_blocks(filtered, base, params):
         except ValueError as exc:
             grids[spec] = {'error': str(exc)}
 
-    return {
+    blocks = {
         'risk': {
             **risk,
             'recovery_factor': recovery_factor(
@@ -166,6 +204,13 @@ def _advanced_blocks(filtered, base, params):
             risk=risk, monte=monte),
         'coverage': insight_rules.coverage(headline),
     }
+    if _truthy(_one(params, 'excursions', '')):
+        # Opt-in: this is the one block that goes back to the terminal for bar
+        # data, so it is slower than everything around it and must not be a
+        # silent cost on every dashboard refresh.
+        blocks['excursions'] = _section(lambda: excursions(
+            filtered, timeframe=_one(params, 'excursion_timeframe', '1')))
+    return blocks
 
 
 def history(params):
@@ -310,6 +355,20 @@ def route(path, params):
 
     if path == '/history':
         return history(params)
+
+    if path == '/excursions':
+        now = int(time.time())
+        data = mt5_client.deals(
+            from_ts=int(_one(params, 'from', now - 30 * 86400)),
+            to_ts=int(_one(params, 'to', now)),
+            symbol=_one(params, 'symbol'),
+            summary=False, limit=1_000_000,
+        )
+        trades = pair_trades(data.get('deals') or [], include_open=False)
+        out = excursions(trades, timeframe=_one(params, 'timeframe', '1'))
+        if _truthy(_one(params, 'summary', 'true')):
+            out.pop('rows', None)
+        return out
 
     if path == '/analytics':
         now = int(time.time())
@@ -493,8 +552,9 @@ def main():
 
     server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
     print(f'Read-only bridge listening on http://127.0.0.1:{args.port}')
-    print('Routes: /overview /history /health /account /symbols /positions /orders'
-          ' /quote /bars /deals /trades /analytics /calendar /blackout')
+    print('Routes: /overview /history /excursions /health /account /symbols'
+          ' /positions /orders /quote /bars /deals /trades /analytics'
+          ' /calendar /blackout')
     try:
         server.serve_forever()
     except KeyboardInterrupt:
