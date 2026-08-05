@@ -27,6 +27,7 @@ import mt5_client
 import excursion
 import insights as insight_rules
 import stops
+import stopsize
 from advanced import (behaviour, daily_pnl, heatmap, holding_time_analysis,
                       kelly_fraction, monte_carlo, recovery_factor,
                       risk_adjusted, size_analysis)
@@ -159,6 +160,10 @@ def excursions(trades, timeframe='1'):
         # The per-trade rows are large; the summary is the point. Callers that
         # want the detail ask for it.
         'summary': excursion.summarize(rows),
+        # Rides along because it needs exactly the same bars and the same
+        # excursion rows — fetching them twice for one extra question would
+        # double the slowest part of the request.
+        'stop_size': stopsize.analyze(trades, rows, bars_by_symbol),
         'analysed': len(rows),
         'rows': rows,
     }
