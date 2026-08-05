@@ -482,6 +482,7 @@ baked into a branch.
 | `/setups?symbol=GOLD.i%23` | Every entry signal in the window, with timestamps, levels and which conditions fired. **No P&L.** This is the checkpoint: pull a few up on a chart and see whether they are setups you would take |
 | `/backtest?symbol=GOLD.i%23` | The same signals replayed with stops, targets, partials and the breakeven trail, summarised as expectancy, win rate and average R |
 | `/sweep?symbol=GOLD.i%23` | Every parameter combination run on both halves of the window — the first 70% chooses, the last 30% judges |
+| `/reconcile?symbol=GOLD.i%23` | What the strategy signalled against what the account actually did: followed, missed, and discretionary |
 
 Both accept `conditions=fvg,liquidity_sweep`, `required=`, `mode=any|all|at_least`,
 `confirmation=close_beyond|engulfing|rejection`, `buffer_pips=`, `risk_pct=`,
@@ -516,6 +517,18 @@ management parameters reorder the R distribution the same way in any window,
 which looks like signal and is not.
 
 Axes are set from the URL: `axes=manage.trail_to_be_at_r:0.5,1.0,none|target.r:2,3`.
+
+`/reconcile` exists because **MT5 records only trades that were taken** — a
+setup you saw and passed on leaves no trace anywhere. Matching signals against
+fills recovers it, in three buckets: `followed`, `missed` (signalled, not
+traded) and `discretionary` (traded with no signal behind it).
+
+The comparison it makes is deliberately narrow. Simulated P&L assumes perfect
+fills, no spread and no slippage; real P&L does not. So "signals I took" versus
+"signals I skipped" is compared simulated-to-simulated, with the real numbers
+reported separately. The difference between a followed signal's simulated and
+real result is its own diagnostic — the execution cost, and the reason a
+backtest saying 1.2R can sit above an account saying 0.4R.
 
 Setup, routes, and the full timestamp contract: **[mt5-bridge/README.md](mt5-bridge/README.md)**.
 
