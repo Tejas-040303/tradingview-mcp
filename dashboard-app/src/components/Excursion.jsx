@@ -75,8 +75,99 @@ export default function Excursion({ data, enabled, onEnable, isFetching }) {
     <>
       <ShakeoutPanel summary={summary} analysed={data.analysed}
         unavailable={data.unavailable} />
+      <StopSizePanel stopSize={data.stop_size} />
       <HeatPanel rows={data.rows} summary={summary} />
     </>
+  );
+}
+
+/**
+ * Was the stop too tight?
+ *
+ * The headline is a counterfactual rather than a volatility model: apply the
+ * stop distance actually observed on stopped-out trades to every winner, and
+ * count how many would have been cut before they worked. It assumes nothing
+ * about how volatility scales and uses the same instrument, setups and holding
+ * times as the trading itself.
+ */
+function StopSizePanel({ stopSize }) {
+  if (!stopSize) return null;
+  const { survival, atr, by_symbol: bySymbol, verdict, too_tight: tooTight } = stopSize;
+
+  const tone = tooTight === true ? 'border-l-warn'
+    : tooTight === false ? 'border-l-up' : 'border-l-line';
+
+  return (
+    <Card className={cn('mb-5 border-l-2', tone)}>
+      <CardTitle hint="Stop distance is taken from the trades that hit a stop — for those, the exit price is where the stop was. Manual exits at a loss are excluded: that is where you gave up, not where the stop sat.">
+        Was the stop too tight?
+      </CardTitle>
+
+      {survival ? (
+        <>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Metric label="Winners it would have killed"
+              value={pct(survival.would_have_been_stopped_pct)}
+              tone={survival.would_have_been_stopped_pct >= 40 ? 'text-warn' : 'text-ink'}
+              note={`${survival.would_have_been_stopped} of ${survival.winners_examined} examined`} />
+            <Metric label="Profit that would have cost"
+              value={money(-Math.abs(survival.profit_at_risk), { sign: false })}
+              tone="text-down" note="realised, on those trades" />
+            <Metric label="Typical stop in ATR"
+              value={atr ? `${num(atr.median_stop_in_atr, 2)}×` : '—'}
+              note={atr ? `${atr.samples} stop-outs · ${atr.period}-bar` : 'no bar coverage'} />
+          </div>
+
+          {Object.keys(bySymbol || {}).length > 0 && (
+            <div className="mt-3 overflow-x-auto">
+              <table className="tabular w-full text-[12px]">
+                <thead className="text-muted">
+                  <tr>
+                    <th className="px-2 py-1.5 text-left font-medium">symbol</th>
+                    <th className="px-2 py-1.5 text-right font-medium">stop-outs</th>
+                    <th className="px-2 py-1.5 text-right font-medium">median stop</th>
+                    <th className="px-2 py-1.5 text-right font-medium">p25 – p75</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(bySymbol).map(([symbol, s]) => (
+                    <tr key={symbol} className={cn('border-t border-line/60',
+                      !s.reliable && 'opacity-70')}>
+                      <td className="px-2 py-1.5 text-left">
+                        {symbol}
+                        {!s.reliable && <span className="ml-1.5 text-warn">thin</span>}
+                      </td>
+                      <td className="px-2 py-1.5 text-right">{s.stops_observed}</td>
+                      <td className="px-2 py-1.5 text-right">{num(s.median_distance, 2)}</td>
+                      <td className="px-2 py-1.5 text-right text-muted">
+                        {num(s.p25, 2)} – {num(s.p75, 2)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      ) : (
+        <Empty>No stopped-out trades with bar coverage in this selection.</Empty>
+      )}
+
+      <p className={cn('mt-3 max-w-3xl text-xs leading-relaxed',
+        tooTight === true ? 'text-warn' : 'text-muted')}>
+        {verdict}
+      </p>
+    </Card>
+  );
+}
+
+function Metric({ label, value, note, tone }) {
+  return (
+    <div className="rounded-xl border border-line bg-elevated p-3">
+      <div className="text-[11px] uppercase tracking-wider text-muted">{label}</div>
+      <div className={cn('tabular mt-1 text-xl font-semibold', tone)}>{value}</div>
+      {note && <div className="mt-0.5 text-[11px] text-muted">{note}</div>}
+    </div>
   );
 }
 

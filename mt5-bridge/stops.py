@@ -24,18 +24,28 @@ UNSET = 0.0
 
 def is_entry_order(order):
     """
-    Did this order open a position?
+    Did this order *open* a position?
 
-    Closing orders carry a position_id too, so the state and direction alone are
-    not enough — an entry is a filled buy or sell that is not itself a close.
+    A position's id is the ticket of the order that opened it — that identity is
+    what separates an entry from the close that follows it. Both rows carry the
+    same position_id and both are ordinary buys or sells, so without this test
+    every position is counted twice. It showed up on a real account as 1079
+    "entry orders" against 534 closed trades.
+
+    Orders with no ticket fall back to the weaker test, which at least excludes
+    close-by rows.
     """
-    if not order.get('position_id'):
+    position_id = order.get('position_id')
+    if not position_id:
         return False
     if str(order.get('type')) not in ('buy', 'sell', 'buy_limit', 'sell_limit',
                                       'buy_stop', 'sell_stop'):
         return False
-    # `position_by_id` is only set on a close-by, which is never an entry.
-    return not order.get('position_by_id')
+    if order.get('position_by_id'):
+        return False
+
+    ticket = order.get('ticket')
+    return ticket == position_id if ticket is not None else True
 
 
 def _usable(value):

@@ -11,10 +11,13 @@ from stops import MIN_SAMPLE, coverage, implied_risk, is_entry_order
 
 
 def order(position_id=1, otype='buy', price=4000.0, sl=3990.0, tp=4020.0,
-          symbol='GOLD.i#', position_by_id=0):
+          symbol='GOLD.i#', position_by_id=0, ticket=None):
+    # A position's id is the ticket of the order that opened it, so an entry
+    # order has ticket == position_id by default.
     return {'position_id': position_id, 'type': otype, 'price_open': price,
             'sl': sl, 'tp': tp, 'symbol': symbol,
-            'position_by_id': position_by_id}
+            'position_by_id': position_by_id,
+            'ticket': position_id if ticket is None else ticket}
 
 
 def trade(position_id=1, is_open=False):
@@ -28,6 +31,20 @@ class TestEntryDetection(unittest.TestCase):
     def test_orders_without_a_position_are_skipped(self):
         self.assertFalse(is_entry_order(order(position_id=None)))
         self.assertFalse(is_entry_order(order(position_id=0)))
+
+    def test_the_closing_order_is_not_an_entry(self):
+        # Both rows share a position_id and both are ordinary buys or sells. On a
+        # real account this counted every position twice — 1079 "entries"
+        # against 534 closed trades.
+        opening = order(position_id=500, ticket=500)
+        closing = order(position_id=500, ticket=501, otype='sell')
+        self.assertTrue(is_entry_order(opening))
+        self.assertFalse(is_entry_order(closing))
+
+    def test_orders_without_a_ticket_fall_back_gracefully(self):
+        row = order(position_id=7)
+        row['ticket'] = None
+        self.assertTrue(is_entry_order(row))
 
     def test_close_by_orders_are_not_entries(self):
         self.assertFalse(is_entry_order(order(position_by_id=77)))
