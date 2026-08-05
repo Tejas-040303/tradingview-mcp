@@ -26,6 +26,15 @@ They are separate processes on purpose: closing TradingView must not take the br
 > [!CAUTION]
 > This tool accesses undocumented internal TradingView APIs via the Electron debug interface. These can change or break without notice in any TradingView update. Pin your TradingView Desktop version if stability matters to you.
 
+## Documentation
+
+| File | What it covers |
+|---|---|
+| `README.md` | What the tools do and how to run them — you are here |
+| **[`HANDOVER.md`](HANDOVER.md)** | **Why the code is shaped this way.** Design rules, the mistakes that produced each guard, and the things that will bite you. Read this before changing analytics |
+| **[`ROADMAP.md`](ROADMAP.md)** | What is planned, what it depends on, and what is deliberately not planned |
+| [`mt5-bridge/README.md`](mt5-bridge/README.md) | Bridge setup, routes, and the full timestamp contract |
+
 ## How It Works (and why it's safe to run)
 
 This tool does not connect to TradingView's servers, modify any TradingView files, or intercept any network traffic. It communicates exclusively with your locally running TradingView Desktop instance via Chrome DevTools Protocol (CDP) — a standard debugging interface built into all Chromium/Electron applications by Google, including VS Code, Slack, and Discord.
@@ -190,16 +199,21 @@ without `--verbose`, and a service that exits non-zero prints the tail of its
 log. Ctrl+C stops only the services it started.
 
 ```bash
-node scripts/start.js --no-tv       # bridge only
-node scripts/start.js --no-bridge   # TradingView only
-node scripts/start.js --verbose     # stream all child output
+node scripts/start.js --no-tv        # bridge only
+node scripts/start.js --no-bridge    # TradingView only
+node scripts/start.js --no-dashboard # skip the React build
+node scripts/start.js --verbose      # stream all child output
 ```
+
+It also builds the React dashboard when the sources have changed, installing its
+dependencies on first run. A build failure is **not fatal** — the bridge and
+TradingView still come up, and the previously built bundle keeps serving.
 
 After the bridge is up it reports whether MT5 is actually connected — a bridge
 answering on its port and a terminal being reachable are different things, and
 conflating them is how "it's running" turns into a confusing debugging session.
 
-### 6. Status dashboard
+### 6. Dashboard
 
 With the bridge running, open:
 
@@ -207,8 +221,31 @@ With the bridge running, open:
 http://127.0.0.1:8765/
 ```
 
-Account, open positions, pending orders, realised P&L by period, and a news
-blackout banner. Read-only — the page cannot place, modify or close anything.
+Two tabs on one page, no navigation between them:
+
+- **Status** — account, open positions, pending orders, realised P&L by period,
+  and a news blackout banner. Polls every 5s.
+- **Analytics** — closed trade history: 15 stat tiles, a rule-based trading
+  coach, equity curve with brush-zoom, a GitHub-style trading calendar,
+  heatmaps, session/symbol/weekday/exit breakdowns, holding-time and
+  position-size analysis, P&L distribution, and a virtualised trade explorer
+  with CSV/JSON export.
+
+Read-only throughout — the page cannot place, modify or close anything.
+
+The Analytics tab is a React app built by the launcher on first run. If that
+build is skipped or fails, `/` falls back to a plain no-build page, and both
+fallbacks stay reachable at `/dashboard/index.html` and
+`/dashboard/history.html`.
+
+Two conventions worth knowing before reading any number on it:
+
+- **Nothing is computed in the browser.** Every statistic comes from the API, so
+  a tile can never disagree with the table beneath it.
+- **Sample size is visible.** Cells and bars below the reliability threshold are
+  drained of colour, and each grid states how many of its own cells are
+  unreliable. A deep green cell built on two trades looks identical to one built
+  on two hundred — that is the failure mode this guards against.
 
 ### 7. Optional — the MT5 bridge
 
@@ -408,7 +445,7 @@ Read `line.new()`, `label.new()`, `table.new()`, `box.new()` output from any vis
 | `ui_open_panel` / `ui_click` / `ui_evaluate` | UI automation |
 | `tv_launch` / `tv_health_check` / `tv_discover` | Connection management |
 
-## Tool Reference — MT5 (11 read-only tools)
+## Tool Reference — MT5 (13 read-only tools)
 
 Served by the separate `mt5` server. Requires `mt5-bridge/bridge.py` running. **None of these can open, modify or close a position.**
 
@@ -421,6 +458,8 @@ Served by the separate `mt5` server. Requires `mt5-bridge/bridge.py` running. **
 | `mt5_bars` | Broker OHLCV. Summary by default | ~600 B (summary) |
 | `mt5_positions` / `mt5_orders` | What is open right now, types decoded | varies |
 | `mt5_deals` | Closed fills. **Summary by default** — win rate, net P&L, exit reasons | ~500 B / ~15 KB paged |
+| `mt5_trades` | Fills **paired into trades** by position_id — entry, exit, duration, partial closes. MT5 reports deals, not trades; this is the only way to see how long a position was held | ~500 B / paged |
+| `mt5_excursions` | What price did **during** each trade and **after** you left: MAE/MFE, capture ratio, and whether price returned to entry within 5/15/60 min of a losing exit | ~2-6 KB |
 | `mt5_analytics` | Expectancy, payoff ratio, drawdown, streaks, and performance by session / exit reason / symbol / hour | ~2-5 KB |
 | `mt5_calendar` | Scheduled events with importance, forecast, previous, `actual` | ~2-4 KB |
 | `mt5_blackout` | **"Is it safe to act right now"** — one deterministic answer | ~600 B |
@@ -428,6 +467,7 @@ Served by the separate `mt5` server. Requires `mt5-bridge/bridge.py` running. **
 Two things worth knowing before building on these:
 
 - **`mt5_deals` only shows trades that were taken.** Skipped setups leave no trace in MT5, so any journal that needs them must log signals separately.
+- **`mt5_excursions` needs M1 bar history downloaded** in the terminal for the period, and is slower than the rest because it fetches bars. The figure it exists to produce is the share of stop-outs where price came back to your entry within five minutes — the direct test of "my stop sat inside normal noise" against "my entry was wrong".
 - **`actual` is `null` until an event is released.** That is correct, not missing data — `forecast` and `previous` are known ahead of time.
 
 Setup, routes, and the full timestamp contract: **[mt5-bridge/README.md](mt5-bridge/README.md)**.
@@ -481,10 +521,11 @@ Claude Code ─┬─ MCP "tradingview" (stdio) ─→ CDP :9222 ─→ TradingV
                                           calendar_export.mq5 ┘ (writes MQL5/Files/*.json)
 ```
 
-- **Transport**: MCP over stdio — 84 TradingView tools + 10 MT5 tools — plus a `tv` CLI (30 commands, 66 subcommands)
+- **Transport**: MCP over stdio — 84 TradingView tools + 13 MT5 tools — plus a `tv` CLI (30 commands, 66 subcommands)
 - **Connections**: Chrome DevTools Protocol on localhost:9222; read-only HTTP bridge on localhost:8765
 - **Streaming**: Poll-and-diff loop with deduplication, JSONL output to stdout
-- **No dependencies** beyond `@modelcontextprotocol/sdk` and `chrome-remote-interface` on the Node side, and `MetaTrader5` on the Python side
+- **Dashboard**: React app built to static assets the bridge serves, same-origin with its API. The Python side stays stdlib-only
+- **No runtime dependencies** beyond `@modelcontextprotocol/sdk` and `chrome-remote-interface` on the Node side, and `MetaTrader5` on the Python side. The dashboard's build-time dependencies live in `dashboard-app/` and are not needed to run the MCP servers
 
 ### Why MT5 needs a Python bridge
 
