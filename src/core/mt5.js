@@ -135,6 +135,22 @@ export function deals({ from, to, symbol, summary = true, limit = 50, offset = 0
   }, _deps);
 }
 
+/**
+ * Post-trade excursion analysis.
+ *
+ * Slower than the other routes because the bridge fetches bar data around every
+ * trade, so it is never folded into a general request — you ask for it.
+ */
+export function excursions({ from, to, symbol, timeframe = '1', summary = true } = {}) {
+  return get('/excursions', {
+    ...(from !== undefined ? { from } : {}),
+    ...(to !== undefined ? { to } : {}),
+    ...(symbol ? { symbol } : {}),
+    timeframe,
+    summary: summary ? 'true' : 'false',
+  });
+}
+
 export function trades({ from, to, symbol, summary = true, closed_only = false,
   limit = 50, offset = 0, _deps } = {}) {
   const now = Math.floor(Date.now() / 1000);
