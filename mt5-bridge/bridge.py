@@ -27,6 +27,7 @@ import mt5_client
 import excursion
 import simulate
 import strategy
+import sweep
 import insights as insight_rules
 import stops
 import stopsize
@@ -102,6 +103,26 @@ def _strategy_config(params):
             None if trail.strip().lower() in ('none', 'off', '') else float(trail))
 
     return {k: v for k, v in cfg.items() if v}
+
+
+def _axis_value(raw):
+    """
+    One value on a sweep axis.
+
+    'none' has to survive as null rather than becoming the string 'none' or the
+    number 0 — it is the no-trail control case, and losing it removes the
+    comparison the sweep exists to make.
+    """
+    text = raw.strip()
+    lowered = text.lower()
+    if lowered in ('none', 'off', 'null'):
+        return None
+    if lowered in ('true', 'false'):
+        return lowered == 'true'
+    try:
+        return float(text) if '.' in text else int(text)
+    except ValueError:
+        return text
 
 
 def _strategy_bars(params):
@@ -505,6 +526,24 @@ def route(path, params):
             result['skipped'] = out['skipped']
         return result
 
+    if path == '/sweep':
+        # Every parameter combination, judged on bars it was not chosen on.
+        symbol, config, data = _strategy_bars(params)
+        axes = None
+        if _one(params, 'axes'):
+            # axes=manage.trail_to_be_at_r:0.5,1.0,none|target.r:2,3
+            axes = {}
+            for part in _one(params, 'axes').split('|'):
+                name, _, values = part.partition(':')
+                axes[name.strip()] = [_axis_value(v) for v in values.split(',')]
+        out = sweep.sweep(data['bars'], symbol, axes=axes, base=config,
+                          split=float(_one(params, 'split', 0.7)),
+                          balance=float(_one(params, 'balance', 1000)),
+                          min_trades=int(_one(params, 'min_trades', 10)))
+        return {**out, 'timeframe': data['timeframe'],
+                'scanned_from': iso(data['bars'][0]['time_utc']) if data['bars'] else None,
+                'scanned_to': iso(data['bars'][-1]['time_utc']) if data['bars'] else None}
+
     if path == '/analytics':
         now = int(time.time())
         # Analytics needs every deal in the window, not a page of them.
@@ -687,7 +726,7 @@ def main():
 
     server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
     print(f'Read-only bridge listening on http://127.0.0.1:{args.port}')
-    print('Routes: /overview /history /excursions /diagnose/stops /setups /backtest /health'
+    print('Routes: /overview /history /excursions /diagnose/stops /setups /backtest /sweep /health'
           ' /account /symbols /positions /orders /quote /bars /deals /trades'
           ' /analytics /calendar /blackout')
     try:

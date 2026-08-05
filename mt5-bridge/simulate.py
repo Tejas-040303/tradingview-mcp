@@ -184,7 +184,7 @@ def _walk(bars, start, plan, setup, symbol, cfg):
             'net': banked, 'stop_kind': stop_kind, 'partial_taken': partial_done}
 
 
-def simulate(bars, symbol, config=None, balance=1000.0, compound=False):
+def simulate(bars, symbol, config=None, balance=1000.0, compound=False, setups=None):
     """
     Replay the config over `bars` and return trades plus what was skipped.
 
@@ -195,9 +195,14 @@ def simulate(bars, symbol, config=None, balance=1000.0, compound=False):
     `compound` sizes each trade off the running balance instead of the starting
     one. Left off by default — with a small account it turns a sizing artefact
     into an exponential curve and makes two parameter sets incomparable.
+
+    `setups` skips detection when the caller already has it. A sweep over
+    management parameters runs dozens of configs whose entry signals are
+    identical, and re-detecting for each one is the bulk of the work.
     """
     cfg = merged(config)
-    setups = find_setups(bars, cfg)
+    if setups is None:
+        setups = find_setups(bars, cfg)
     trades, skipped = [], []
     balance_now = balance
     busy_until = -1
