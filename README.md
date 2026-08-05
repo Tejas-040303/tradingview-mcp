@@ -483,6 +483,7 @@ baked into a branch.
 | `/backtest?symbol=GOLD.i%23` | The same signals replayed with stops, targets, partials and the breakeven trail, summarised as expectancy, win rate and average R |
 | `/sweep?symbol=GOLD.i%23` | Every parameter combination run on both halves of the window — the first 70% chooses, the last 30% judges |
 | `/reconcile?symbol=GOLD.i%23` | What the strategy signalled against what the account actually did: followed, missed, and discretionary |
+| `/paper?symbol=GOLD.i%23` | What the strategy would be doing right now — open position with its levels, a pending confirmation, recent closed trades |
 
 Both accept `conditions=fvg,liquidity_sweep`, `required=`, `mode=any|all|at_least`,
 `confirmation=close_beyond|engulfing|rejection`, `buffer_pips=`, `risk_pct=`,
@@ -517,6 +518,18 @@ management parameters reorder the R distribution the same way in any window,
 which looks like signal and is not.
 
 Axes are set from the URL: `axes=manage.trail_to_be_at_r:0.5,1.0,none|target.r:2,3`.
+
+`/paper` is reconstructed from bars on every call rather than accumulated in a
+state file. A paper runner that carries state drifts: restart it and the
+position is gone, run two and they disagree, and the record of what it "would
+have done" quietly becomes a record of when the process was alive.
+
+It also drops the bar that is **still forming**. MT5 returns the current
+incomplete candle as the last row of `copy_rates_from_pos`, looking exactly
+like a finished one, with a high, low and close that keep changing. Acting on
+it is the live twin of the lookahead `knowable_at` exists to prevent — signals
+appear and vanish as the minute progresses, and live results stop resembling
+the backtest for reasons nobody can reproduce afterwards.
 
 `/reconcile` exists because **MT5 records only trades that were taken** — a
 setup you saw and passed on leaves no trace anywhere. Matching signals against
