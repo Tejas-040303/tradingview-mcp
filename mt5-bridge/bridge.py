@@ -25,6 +25,8 @@ from urllib.parse import urlparse, parse_qs
 
 import mt5_client
 import excursion
+import simulate
+import strategy
 import insights as insight_rules
 import stops
 import stopsize
@@ -54,6 +56,70 @@ def _csv(params, key):
 
 def _truthy(value):
     return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _strategy_config(params):
+    """
+    A strategy config from query parameters.
+
+    Every field is optional and falls back to `strategy.DEFAULT_CONFIG`, so a
+    bare `/backtest?symbol=GOLD.i%23` runs the current best guess and each
+    parameter can be varied one at a time from a URL. `trail=none` disables the
+    breakeven trail — the control case, and the reason this is spelled rather
+    than assumed.
+    """
+    conditions = _csv(params, 'conditions')
+    cfg = {'entry': {}, 'stop': {}, 'size': {}, 'manage': {}, 'target': {}}
+
+    if conditions:
+        cfg['entry']['conditions'] = {
+            name: {'on': name in conditions} for name in strategy.CONDITIONS}
+    for name in _csv(params, 'required') or []:
+        cfg['entry'].setdefault('conditions', {}).setdefault(name, {})['required'] = True
+
+    if _one(params, 'mode'):
+        cfg['entry']['mode'] = _one(params, 'mode')
+    if _one(params, 'min_conditions'):
+        cfg['entry']['min_conditions'] = int(_one(params, 'min_conditions'))
+    if _one(params, 'confirmation'):
+        cfg['entry']['confirmation'] = {'type': _one(params, 'confirmation')}
+    if _one(params, 'buffer_pips'):
+        cfg['stop']['buffer_pips'] = float(_one(params, 'buffer_pips'))
+    if _one(params, 'risk_pct'):
+        cfg['size']['risk_pct'] = float(_one(params, 'risk_pct'))
+    if _one(params, 'max_risk_pct'):
+        cfg['size']['max_risk_pct'] = float(_one(params, 'max_risk_pct'))
+    if _one(params, 'target_r'):
+        cfg['target']['r'] = float(_one(params, 'target_r'))
+    if _one(params, 'partial_pct'):
+        cfg['manage']['partial_pct'] = float(_one(params, 'partial_pct'))
+    if _one(params, 'partial_at_r'):
+        cfg['manage']['partial_at_r'] = float(_one(params, 'partial_at_r'))
+
+    trail = _one(params, 'trail')
+    if trail is not None:
+        cfg['manage']['trail_to_be_at_r'] = (
+            None if trail.strip().lower() in ('none', 'off', '') else float(trail))
+
+    return {k: v for k, v in cfg.items() if v}
+
+
+def _strategy_bars(params):
+    """Bars for a strategy run, with the symbol and config it was asked for."""
+    symbol = _one(params, 'symbol')
+    if not symbol:
+        raise ValueError('symbol is required')
+
+    config = _strategy_config(params)
+    problems = strategy.validate(config)
+    if problems:
+        # Refuse rather than silently running a config that cannot trigger.
+        raise ValueError('; '.join(problems))
+
+    data = mt5_client.bars(symbol,
+                           timeframe=_one(params, 'timeframe', '5'),
+                           count=int(_one(params, 'count', 1000)))
+    return symbol, config, data
 
 
 def _section(fn):
@@ -396,6 +462,49 @@ def route(path, params):
             out.pop('rows', None)
         return out
 
+    if path == '/setups':
+        # Detection with no simulation attached. This is the sanity check that
+        # has to pass before a backtest number means anything: pull a few of
+        # these up on a chart and see whether they are setups you would take.
+        symbol, config, data = _strategy_bars(params)
+        rows = simulate.find_setups(data['bars'], config)
+        window, page = paginate(rows,
+                                limit=int(_one(params, 'limit', 50)),
+                                offset=int(_one(params, 'offset', 0)))
+        return {
+            'success': True,
+            'symbol': symbol,
+            'timeframe': data['timeframe'],
+            'bars_scanned': len(data['bars']),
+            'scanned_from': iso(data['bars'][0]['time_utc']) if data['bars'] else None,
+            'scanned_to': iso(data['bars'][-1]['time_utc']) if data['bars'] else None,
+            'setups': len(rows),
+            'config': strategy.merged(config),
+            'page': page,
+            'rows': window,
+        }
+
+    if path == '/backtest':
+        symbol, config, data = _strategy_bars(params)
+        balance = float(_one(params, 'balance', 1000))
+        out = simulate.simulate(data['bars'], symbol, config, balance=balance,
+                                compound=_truthy(_one(params, 'compound', '')))
+        result = {
+            'success': True,
+            'symbol': symbol,
+            'timeframe': data['timeframe'],
+            'bars_scanned': len(data['bars']),
+            'scanned_from': iso(data['bars'][0]['time_utc']) if data['bars'] else None,
+            'scanned_to': iso(data['bars'][-1]['time_utc']) if data['bars'] else None,
+            'summary': out['summary'],
+        }
+        # Trades are the bulky part and are rarely wanted on the first look.
+        if _truthy(_one(params, 'trades', '')):
+            result['trades'] = out['trades']
+        if _truthy(_one(params, 'skipped', '')):
+            result['skipped'] = out['skipped']
+        return result
+
     if path == '/analytics':
         now = int(time.time())
         # Analytics needs every deal in the window, not a page of them.
@@ -578,7 +687,7 @@ def main():
 
     server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
     print(f'Read-only bridge listening on http://127.0.0.1:{args.port}')
-    print('Routes: /overview /history /excursions /diagnose/stops /health'
+    print('Routes: /overview /history /excursions /diagnose/stops /setups /backtest /health'
           ' /account /symbols /positions /orders /quote /bars /deals /trades'
           ' /analytics /calendar /blackout')
     try:

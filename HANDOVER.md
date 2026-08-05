@@ -246,6 +246,9 @@ mt5-bridge/             Python, stdlib only
   advanced.py           Pure: Sharpe/Sortino, Monte Carlo, heatmaps, behaviour
   insights.py           Pure: coaching rules with sample guards
   excursion.py          Pure: MAE/MFE and post-exit behaviour
+  strategy.py           Pure: strategy-as-data, validation, position sizing
+  detectors.py          Pure: FVG / sweep / order block / fib, with knowable_at
+  simulate.py           Pure: bar replay, emitting the pair_trades() shape
   dashboard/            Plain HTML fallback pages + built React bundle (app/)
 dashboard-app/          React source (Vite + Tailwind + Recharts + TanStack)
 scripts/start.js        One-command launcher
@@ -255,7 +258,7 @@ scripts/start.js        One-command launcher
 is testable without a terminal. Every `mt5-bridge/*.py` module except
 `mt5_client.py` imports nothing platform-specific and runs on Linux in CI.
 
-**Test counts:** 270 Python, 22 Node MT5, plus the wider Node suite. CI runs
+**Test counts:** 414 Python, 22 Node MT5, plus the wider Node suite. CI runs
 lint, both suites, and a dashboard build that verifies the bundle is actually
 servable — a wrong `base` path builds cleanly and produces a blank page.
 

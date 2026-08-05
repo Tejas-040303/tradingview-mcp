@@ -470,6 +470,39 @@ Two things worth knowing before building on these:
 - **`mt5_excursions` needs M1 bar history downloaded** in the terminal for the period, and is slower than the rest because it fetches bars. The figure it exists to produce is the share of stop-outs where price came back to your entry within five minutes — the direct test of "my stop sat inside normal noise" against "my entry was wrong".
 - **`actual` is `null` until an event is released.** That is correct, not missing data — `forecast` and `previous` are known ahead of time.
 
+### Strategy engine (bridge routes, not yet MCP tools)
+
+Two read-only routes on the same bridge replay a strategy over broker bars. The
+strategy is a dict — every entry condition a toggle, every threshold a number —
+so a belief about the setup is a field that can be swept rather than an opinion
+baked into a branch.
+
+| Route | What it answers |
+|-------|-----------------|
+| `/setups?symbol=GOLD.i%23` | Every entry signal in the window, with timestamps, levels and which conditions fired. **No P&L.** This is the checkpoint: pull a few up on a chart and see whether they are setups you would take |
+| `/backtest?symbol=GOLD.i%23` | The same signals replayed with stops, targets, partials and the breakeven trail, summarised as expectancy, win rate and average R |
+
+Both accept `conditions=fvg,liquidity_sweep`, `required=`, `mode=any|all|at_least`,
+`confirmation=close_beyond|engulfing|rejection`, `buffer_pips=`, `risk_pct=`,
+`target_r=`, `partial_pct=`, `partial_at_r=`, `trail=1.0` or `trail=none`,
+`timeframe=`, `count=`, `balance=`.
+
+Three rules keep the numbers honest, and each one flatters a strategy when
+broken:
+
+- **Entry fills at the next bar's open**, never at the confirmation candle's
+  close — that close is not known until the bar has ended.
+- **A bar containing both the stop and the target resolves as the stop.** Bar
+  data cannot order two intrabar touches; assuming the target is how a losing
+  strategy backtests profitably.
+- **Sizing goes through the same `position_size` the live bot will use**, so a
+  balance too small for the instrument produces *refused* setups with reasons,
+  not fractional lots the broker would reject. On a random-walk series the
+  simulator returns an average R of roughly zero, which is the point.
+
+Simulated trades come out in exactly the shape `mt5_trades` produces, so they
+flow through the existing analytics and dashboards with no second code path.
+
 Setup, routes, and the full timestamp contract: **[mt5-bridge/README.md](mt5-bridge/README.md)**.
 
 ## Context Management
