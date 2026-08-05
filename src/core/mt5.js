@@ -151,6 +151,21 @@ export function excursions({ from, to, symbol, timeframe = '1', summary = true }
   });
 }
 
+/**
+ * Can the stop distance be recovered from order history?
+ *
+ * One question, one answer per account. Everything R-multiple-shaped depends on
+ * it, and it cannot be reasoned about — only measured against a real account.
+ */
+export function diagnoseStops({ from, to, symbol, sample } = {}) {
+  return get('/diagnose/stops', {
+    ...(from !== undefined ? { from } : {}),
+    ...(to !== undefined ? { to } : {}),
+    ...(symbol ? { symbol } : {}),
+    ...(sample !== undefined ? { sample } : {}),
+  });
+}
+
 export function trades({ from, to, symbol, summary = true, closed_only = false,
   limit = 50, offset = 0, _deps } = {}) {
   const now = Math.floor(Date.now() / 1000);

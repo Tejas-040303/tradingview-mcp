@@ -136,6 +136,18 @@ export function registerMt5Tools(server) {
   );
 
   server.tool(
+    'mt5_diagnose_stops',
+    'Answers whether the stop-loss distance can be recovered from order history. Deal history carries no SL, which is why risk %, R-multiples and average RR are unavailable; order history does carry it, but whether the field is populated depends on the broker and on how the stop was attached. Returns coverage over sampled entry orders, coverage over closed trades, the median risk distance, and a plain verdict on whether R-multiple analysis is viable without manual journalling. Defaults to a one-year window.',
+    {
+      from: z.coerce.number().optional().describe('Window start, unix seconds UTC (default one year ago)'),
+      to: z.coerce.number().optional().describe('Window end, unix seconds UTC (default now)'),
+      symbol: z.string().optional().describe('Narrow to one symbol'),
+      sample: z.coerce.number().optional().describe('How many recent entry orders to sample (default 200)'),
+    },
+    guard(({ from, to, symbol, sample }) => core.diagnoseStops({ from, to, symbol, sample })),
+  );
+
+  server.tool(
     'mt5_analytics',
     'Deep analysis of closed trade history: expectancy, payoff ratio, win/loss streaks, max drawdown, and performance broken down by exit reason, session, symbol, weekday or hour. Answers "when do I lose money" rather than just "how much". Pass starting_balance to get drawdown as a percentage.',
     {

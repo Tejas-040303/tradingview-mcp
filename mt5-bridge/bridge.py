@@ -26,6 +26,7 @@ from urllib.parse import urlparse, parse_qs
 import mt5_client
 import excursion
 import insights as insight_rules
+import stops
 from advanced import (behaviour, daily_pnl, heatmap, holding_time_analysis,
                       kelly_fraction, monte_carlo, recovery_factor,
                       risk_adjusted, size_analysis)
@@ -356,6 +357,26 @@ def route(path, params):
     if path == '/history':
         return history(params)
 
+    if path == '/diagnose/stops':
+        # Answers one question: can the stop distance be recovered from order
+        # history, and therefore are R-multiples possible without journalling?
+        now = int(time.time())
+        from_ts = int(_one(params, 'from', now - 365 * 86400))
+        to_ts = int(_one(params, 'to', now))
+        orders = mt5_client.orders_history(from_ts, to_ts,
+                                           symbol=_one(params, 'symbol'))
+        trades = pair_trades(
+            mt5_client.deals(from_ts=from_ts, to_ts=to_ts,
+                             symbol=_one(params, 'symbol'),
+                             summary=False, limit=1_000_000).get('deals') or [],
+            include_open=False)
+        return {
+            'success': True,
+            'requested_window_utc': {'from': from_ts, 'to': to_ts},
+            **stops.coverage(orders, trades=trades,
+                             sample_limit=int(_one(params, 'sample', 200))),
+        }
+
     if path == '/excursions':
         now = int(time.time())
         data = mt5_client.deals(
@@ -552,9 +573,9 @@ def main():
 
     server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
     print(f'Read-only bridge listening on http://127.0.0.1:{args.port}')
-    print('Routes: /overview /history /excursions /health /account /symbols'
-          ' /positions /orders /quote /bars /deals /trades /analytics'
-          ' /calendar /blackout')
+    print('Routes: /overview /history /excursions /diagnose/stops /health'
+          ' /account /symbols /positions /orders /quote /bars /deals /trades'
+          ' /analytics /calendar /blackout')
     try:
         server.serve_forever()
     except KeyboardInterrupt:
