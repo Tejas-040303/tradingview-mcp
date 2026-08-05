@@ -25,6 +25,7 @@ from urllib.parse import urlparse, parse_qs
 
 import mt5_client
 import excursion
+import reconcile
 import simulate
 import strategy
 import sweep
@@ -526,6 +527,41 @@ def route(path, params):
             result['skipped'] = out['skipped']
         return result
 
+    if path == '/reconcile':
+        # What the strategy called, against what the account actually did.
+        # MT5 records only trades that were taken, so the setups you passed on
+        # exist nowhere else — this is the only way to see them.
+        symbol, config, data = _strategy_bars(params)
+        signals = simulate.simulate(data['bars'], symbol, config,
+                                    balance=float(_one(params, 'balance', 1000)))
+        if not data['bars']:
+            return {'success': True, 'symbol': symbol,
+                    'note': 'no bars in the window'}
+
+        window_from = data['bars'][0]['time_utc']
+        window_to = data['bars'][-1]['time_utc']
+        real_trades = pair_trades(
+            mt5_client.deals(from_ts=window_from, to_ts=window_to, symbol=symbol,
+                             summary=False, limit=1_000_000).get('deals') or [],
+            include_open=False)
+
+        out = reconcile.reconcile(
+            signals['trades'], real_trades,
+            tolerance_sec=int(_one(params, 'tolerance', reconcile.DEFAULT_TOLERANCE_SEC)))
+        result = {
+            'success': True, 'symbol': symbol, 'timeframe': data['timeframe'],
+            'window': {'from': iso(window_from), 'to': iso(window_to)},
+            **out,
+        }
+        if _truthy(_one(params, 'detail', '')):
+            matched, missed, extra = reconcile.match(
+                signals['trades'], real_trades,
+                tolerance_sec=int(_one(params, 'tolerance',
+                                       reconcile.DEFAULT_TOLERANCE_SEC)))
+            result['rows'] = {'followed': matched, 'missed': missed,
+                              'discretionary': extra}
+        return result
+
     if path == '/sweep':
         # Every parameter combination, judged on bars it was not chosen on.
         symbol, config, data = _strategy_bars(params)
@@ -726,7 +762,7 @@ def main():
 
     server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
     print(f'Read-only bridge listening on http://127.0.0.1:{args.port}')
-    print('Routes: /overview /history /excursions /diagnose/stops /setups /backtest /sweep /health'
+    print('Routes: /overview /history /excursions /diagnose/stops /setups /backtest /sweep /reconcile /health'
           ' /account /symbols /positions /orders /quote /bars /deals /trades'
           ' /analytics /calendar /blackout')
     try:
