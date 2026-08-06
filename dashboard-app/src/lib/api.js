@@ -99,6 +99,66 @@ export async function fetchOverview(signal) {
   return res.json();
 }
 
+/**
+ * Strategy-engine routes.
+ *
+ * `trail` is deliberately a string that may be the literal "none": the bridge
+ * parses that back to null, disabling the breakeven trail. Coercing it to a
+ * number here would turn "off" into 0 and delete the control case from any
+ * comparison against it.
+ */
+export function strategyQuery(cfg = {}) {
+  const params = new URLSearchParams();
+  const pass = ['symbol', 'timeframe', 'count', 'balance', 'conditions', 'required',
+    'mode', 'min_conditions', 'confirmation', 'buffer_pips', 'risk_pct',
+    'max_risk_pct', 'target_r', 'partial_pct', 'partial_at_r', 'trail'];
+  for (const key of pass) {
+    const value = cfg[key];
+    if (value === undefined || value === null || value === '') continue;
+    params.set(key, String(value));
+  }
+  return params;
+}
+
+async function readJson(res) {
+  let body;
+  try {
+    body = await res.json();
+  } catch {
+    throw new Error(`Bridge returned ${res.status} with a non-JSON body`);
+  }
+  if (!res.ok || body.success === false) {
+    throw new Error(body.error || `Bridge returned ${res.status}`);
+  }
+  return body;
+}
+
+export async function fetchPaper(cfg, signal) {
+  const params = strategyQuery(cfg);
+  if (cfg.recent) params.set('recent', String(cfg.recent));
+  return readJson(await fetch(`/paper?${params}`, { cache: 'no-store', signal }));
+}
+
+export async function fetchSetups(cfg, signal) {
+  const params = strategyQuery(cfg);
+  params.set('limit', String(cfg.limit ?? 50));
+  if (cfg.offset) params.set('offset', String(cfg.offset));
+  return readJson(await fetch(`/setups?${params}`, { cache: 'no-store', signal }));
+}
+
+export async function fetchBacktest(cfg, signal) {
+  const params = strategyQuery(cfg);
+  if (cfg.skipped) params.set('skipped', '1');
+  return readJson(await fetch(`/backtest?${params}`, { cache: 'no-store', signal }));
+}
+
+export const CONDITION_LABELS = {
+  fvg: 'Fair value gap',
+  liquidity_sweep: 'Liquidity sweep',
+  order_block: 'Order block',
+  fib: 'Fibonacci',
+};
+
 export const SEVERITY = {
   critical: { label: 'Critical', dot: 'bg-down', ring: 'ring-down/30', text: 'text-down' },
   warning: { label: 'Warning', dot: 'bg-warn', ring: 'ring-warn/30', text: 'text-warn' },

@@ -221,7 +221,7 @@ With the bridge running, open:
 http://127.0.0.1:8765/
 ```
 
-Two tabs on one page, no navigation between them:
+Three tabs on one page, no navigation between them:
 
 - **Status** — account, open positions, pending orders, realised P&L by period,
   and a news blackout banner. Polls every 5s.
@@ -230,10 +230,15 @@ Two tabs on one page, no navigation between them:
   heatmaps, session/symbol/weekday/exit breakdowns, holding-time and
   position-size analysis, P&L distribution, and a virtualised trade explorer
   with CSV/JSON export.
+- **Bot** — the simulated strategy: the open paper position with its stop,
+  target and lot, any confirmation waiting on an entry bar, the detected setups
+  list, and the backtest behind them. The setups table deliberately carries no
+  profit column — it is the list to check against a chart, and a P&L figure
+  there invites reading it as a result.
 
 Read-only throughout — the page cannot place, modify or close anything.
 
-The Analytics tab is a React app built by the launcher on first run. If that
+The Analytics and Bot tabs are a React app built by the launcher on first run. If that
 build is skipped or fails, `/` falls back to a plain no-build page, and both
 fallbacks stay reachable at `/dashboard/index.html` and
 `/dashboard/history.html`.

@@ -254,6 +254,8 @@ mt5-bridge/             Python, stdlib only
   paper.py              Pure: live view, dropping the bar still forming
   dashboard/            Plain HTML fallback pages + built React bundle (app/)
 dashboard-app/          React source (Vite + Tailwind + Recharts + TanStack)
+                        Tabs: Status (/overview), Analytics (/history),
+                        Bot (/paper + /setups + /backtest)
 scripts/start.js        One-command launcher
 ```
 
