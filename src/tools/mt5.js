@@ -24,6 +24,34 @@ function guard(fn) {
   };
 }
 
+/**
+ * Strategy configuration, accepted identically by all five strategy tools.
+ *
+ * Every field is optional and falls back to the bridge's default strategy, so
+ * one knob can be varied at a time. `trail` takes "none" as well as a number
+ * because switching the breakeven trail off is the control case for any
+ * comparison against it — a parameter that cannot express "off" quietly
+ * removes the comparison.
+ */
+const STRATEGY_PARAMS = {
+  symbol: z.string().describe('Broker symbol, e.g. "GOLD.i#" (find it with mt5_symbol_search)'),
+  timeframe: z.string().optional().describe('Bar timeframe: 1, 5, 15, 30, 60, 240, D, W (default 5)'),
+  count: z.coerce.number().optional().describe('Bars to scan, max 5000 (default 1000)'),
+  balance: z.coerce.number().optional().describe('Account balance to size positions against (default 1000)'),
+  conditions: z.string().optional().describe('Comma-separated entry conditions to enable: fvg, liquidity_sweep, order_block, fib. Naming any switches the others OFF'),
+  required: z.string().optional().describe('Comma-separated conditions that MUST be present regardless of mode — expresses "sweep is mandatory, FVG is a bonus"'),
+  mode: z.string().optional().describe('any (each level is its own setup), all (confluence), or at_least (default any)'),
+  min_conditions: z.coerce.number().optional().describe('How many conditions must fire in at_least mode'),
+  confirmation: z.string().optional().describe('close_beyond, engulfing or rejection (default close_beyond)'),
+  buffer_pips: z.coerce.number().optional().describe('Stop distance beyond the confirmation candle, in pips (default 7)'),
+  risk_pct: z.coerce.number().optional().describe('Percent of balance risked per trade (default 1.0)'),
+  max_risk_pct: z.coerce.number().optional().describe('Refuse a trade whose minimum lot would risk more than this (default 2.0)'),
+  target_r: z.coerce.number().optional().describe('Target as a multiple of the stop distance (default 2.0)'),
+  partial_pct: z.coerce.number().optional().describe('Percent of the position closed at partial_at_r (default 50). A minimum-lot position cannot be split and is carried to the target instead'),
+  partial_at_r: z.coerce.number().optional().describe('R multiple at which the partial is taken (default 1.0)'),
+  trail: z.string().optional().describe('R multiple at which the stop moves to breakeven, or "none" to disable it (default 1.0). "none" is the control case for testing whether trailing helps'),
+};
+
 export function registerMt5Tools(server) {
   server.tool(
     'mt5_health',
@@ -190,5 +218,64 @@ export function registerMt5Tools(server) {
         currencies: currencies || 'USD',
         before_min, after_min, min_importance,
       })),
+  );
+  // ---------------------------------------------------------------------
+  // Strategy engine. Read-only like everything above: these describe what a
+  // strategy would do, and none of them can place an order.
+  //
+  // The knobs repeat across all five because a comparison is only meaningful
+  // when both runs are configured the same way, and threading one shared
+  // object through would hide which are actually accepted.
+  // ---------------------------------------------------------------------
+
+  server.tool(
+    'mt5_setups',
+    'Entry signals the strategy detects, with NO profit-and-loss attached — timestamps, direction, the levels that fired and which conditions matched. This is the checkpoint before any backtest number is worth quoting: pull a few up on a chart and judge whether they are setups worth taking. If the detectors find the wrong things, no amount of parameter tuning fixes that.',
+    { ...STRATEGY_PARAMS,
+      limit: z.coerce.number().optional().describe('Rows per page (default 50)'),
+      offset: z.coerce.number().optional().describe('Page offset (default 0)'),
+    },
+    guard((args) => core.setups(args)),
+  );
+
+  server.tool(
+    'mt5_backtest',
+    'Replay the detected signals with stops, targets, partial closes and the breakeven trail, returning expectancy, win rate, average R and where the trades exited. Three rules keep it honest: entry fills at the NEXT bar open rather than the confirmation close, a bar containing both stop and target resolves as the STOP since bar data cannot order two intrabar touches, and sizing goes through the same position sizer as everything else so an unaffordable setup is refused with a reason rather than taken at a fractional lot.',
+    { ...STRATEGY_PARAMS,
+      trades: z.coerce.boolean().optional().describe('Include every trade, not just the summary (default false — it is long)'),
+      skipped: z.coerce.boolean().optional().describe('Include the signals that were not traded, with reasons (default false)'),
+      compound: z.coerce.boolean().optional().describe('Size off the running balance instead of the starting one (default false — it makes two parameter sets incomparable)'),
+    },
+    guard((args) => core.backtest(args)),
+  );
+
+  server.tool(
+    'mt5_sweep',
+    'Run every parameter combination across a chronological split — the first 70% of bars chooses, the last 30% judges — and report what the result is actually entitled to claim. Returns the best configuration alongside the MEDIAN one, the rank correlation between the two halves, and the in-sample-to-out-of-sample gap that measures overfitting. It refuses to call a result trustworthy unless the winner is profitable out of sample AND the ordering survives the split AND the winner is clear of the median. Slow: the default grid is thirty configurations over the whole window.',
+    { ...STRATEGY_PARAMS,
+      axes: z.string().optional().describe('Grid to sweep, e.g. "manage.trail_to_be_at_r:0.5,1.0,none|target.r:2,3". Omit for the default grid of trail x partial x target'),
+      split: z.coerce.number().optional().describe('Fraction of bars used to choose rather than judge (default 0.7)'),
+      min_trades: z.coerce.number().optional().describe('Closed trades needed in BOTH halves before a configuration is ranked (default 10)'),
+    },
+    guard((args) => core.sweep(args)),
+  );
+
+  server.tool(
+    'mt5_paper',
+    'What the strategy would be doing right now: the open paper position with its stop, target and lot, any confirmation still waiting on an entry bar, and recent closed trades. Reconstructed from bars on every call rather than kept in a state file, so a restart changes nothing and two calls agree. The bar still forming is always dropped — MT5 returns the current incomplete candle looking exactly like a finished one, and acting on it is the live equivalent of lookahead.',
+    { ...STRATEGY_PARAMS,
+      recent: z.coerce.number().optional().describe('How many recent closed trades to include (default 5)'),
+    },
+    guard((args) => core.paper(args)),
+  );
+
+  server.tool(
+    'mt5_reconcile',
+    'Match the strategy\'s signals against what the account actually did, in three buckets: followed, missed (signalled but not traded) and discretionary (traded with no signal behind it). MT5 records only trades that were TAKEN, so this is the only way to see the setups that were passed on. Compares taken-versus-skipped simulated-to-simulated, since simulated fills assume no spread or slippage and real ones do not; the gap between a followed signal\'s simulated and real result is reported separately as the execution cost. No finding is claimed unless both sides clear ten trades.',
+    { ...STRATEGY_PARAMS,
+      tolerance: z.coerce.number().optional().describe('Seconds between a signal and a fill for them to count as the same trade (default 900)'),
+      detail: z.coerce.boolean().optional().describe('Include the individual matched, missed and discretionary rows (default false)'),
+    },
+    guard((args) => core.reconcile(args)),
   );
 }

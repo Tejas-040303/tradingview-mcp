@@ -204,3 +204,75 @@ export function blackout({ currencies = ['USD'], before_min = 15, after_min = 15
     currencies, before_min, after_min, min_importance,
   }, _deps);
 }
+
+/**
+ * Strategy-engine routes.
+ *
+ * All read-only like everything above: these describe what a strategy would
+ * do, and nothing here can place an order.
+ *
+ * The config knobs are passed through verbatim rather than defaulted here, so
+ * the bridge stays the single place a strategy default is defined. One
+ * exception is deliberate — `trail` must survive as the string "none" rather
+ * than being coerced to 0 or dropped, because turning the breakeven trail off
+ * is the control case for any comparison against it.
+ */
+function strategyParams({ symbol, timeframe, count, balance, conditions, required,
+  mode, min_conditions, confirmation, buffer_pips, risk_pct, max_risk_pct,
+  target_r, partial_pct, partial_at_r, trail } = {}) {
+  return {
+    symbol, timeframe, count, balance, conditions, required, mode,
+    min_conditions, confirmation, buffer_pips, risk_pct, max_risk_pct,
+    target_r, partial_pct, partial_at_r,
+    // `query()` drops null and '', so an unset trail must stay undefined while
+    // an explicit "none" survives as text the bridge parses back to null.
+    ...(trail === undefined || trail === null ? {} : { trail: String(trail) }),
+  };
+}
+
+/**
+ * Detected entry signals, with no simulation attached.
+ *
+ * The checkpoint before any backtest number means anything: each row carries a
+ * timestamp, direction and the levels involved, so it can be checked against a
+ * chart and judged as a setup worth taking.
+ */
+export function setups({ limit, offset, _deps, ...rest } = {}) {
+  return get('/setups', { ...strategyParams(rest), limit, offset }, _deps);
+}
+
+/** Replay those signals with stops, targets, partials and the trail. */
+export function backtest({ trades = false, skipped = false, compound = false,
+  _deps, ...rest } = {}) {
+  return get('/backtest', {
+    ...strategyParams(rest),
+    trades: trades ? 1 : '',
+    skipped: skipped ? 1 : '',
+    compound: compound ? 1 : '',
+  }, _deps);
+}
+
+/**
+ * Every parameter combination, judged on bars it was not chosen on.
+ *
+ * The slowest route by a wide margin — the default grid is thirty
+ * configurations over the whole window — so it is never folded into anything
+ * else.
+ */
+export function sweep({ axes, split, min_trades, _deps, ...rest } = {}) {
+  return get('/sweep', {
+    ...strategyParams(rest), axes, split, min_trades,
+  }, _deps);
+}
+
+/** What the strategy would be doing right now. */
+export function paper({ recent, _deps, ...rest } = {}) {
+  return get('/paper', { ...strategyParams(rest), recent }, _deps);
+}
+
+/** Signals against fills: followed, missed, and traded-without-a-signal. */
+export function reconcile({ tolerance, detail = false, _deps, ...rest } = {}) {
+  return get('/reconcile', {
+    ...strategyParams(rest), tolerance, detail: detail ? 1 : '',
+  }, _deps);
+}

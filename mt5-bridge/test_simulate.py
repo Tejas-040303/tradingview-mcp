@@ -158,6 +158,37 @@ class TestManagement(unittest.TestCase):
         bars = with_setup() + [bar(6, 106, 109.5, 105, 109)]
         trade = simulate(bars, GOLD, cfg, balance=10_000)['trades'][0]
         self.assertEqual(trade['sim']['r_multiple'], 1.0)
+        # Closing everything is a real exit, not the series running out.
+        self.assertEqual(trade['exit_reason'], TARGET)
+        self.assertIsNone(trade['sim']['partial_skipped'])
+
+    def test_a_minimum_lot_position_is_never_half_closed(self):
+        # The bug this exists for. round(0.01 * 50/100, 2) is 0.01, so a "50%
+        # partial" closed the whole position at 1R — capping every winner at
+        # exactly +1R while losers stayed at -1R, which forces negative
+        # expectancy no matter how good the entry is.
+        cfg = {**PLAIN, 'manage': {'partial_pct': 50, 'partial_at_r': 1.0,
+                                   'trail_to_be_at_r': None}}
+        # Balance sized so the position is exactly one minimum lot.
+        bars = with_setup() + [bar(6, 106, 109.5, 105.9, 109),
+                               bar(7, 109, 113, 108, 112)]
+        trade = simulate(bars, GOLD, cfg, balance=300)['trades'][0]
+        self.assertEqual(trade['volume'], 0.01)
+        self.assertEqual(trade['partial_closes'], 0)
+        self.assertIn('cannot be split', trade['sim']['partial_skipped'])
+        # The whole point: it reaches the 2R target instead of stopping at 1R.
+        self.assertEqual(trade['exit_reason'], TARGET)
+        self.assertEqual(trade['sim']['r_multiple'], 2.0)
+
+    def test_a_partial_that_would_leave_a_sliver_is_refused(self):
+        # 0.03 lots, 90% requested: 0.02 taken would leave 0.01 (fine), but a
+        # request that rounds to the whole position minus nothing is not.
+        from simulate import _partial_lot
+        spec = {'lot_step': 0.01, 'min_lot': 0.01}
+        self.assertIsNone(_partial_lot(0.01, 50, spec))     # cannot split one lot
+        self.assertEqual(_partial_lot(0.02, 50, spec), 0.01)
+        self.assertEqual(_partial_lot(0.03, 50, spec), 0.01)  # rounds down
+        self.assertEqual(_partial_lot(0.01, 100, spec), 0.01)  # full close is fine
 
 
 class TestSizing(unittest.TestCase):

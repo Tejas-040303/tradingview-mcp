@@ -86,7 +86,7 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 
 ## MT5 Broker Data (separate MCP server)
 
-A second MCP server — `mt5`, 11 read-only tools — exposes a MetaTrader 5 terminal
+A second MCP server — `mt5`, 19 read-only tools — exposes a MetaTrader 5 terminal
 via the local Python bridge (`mt5-bridge/bridge.py`). It is a **different
 process** from this one: TradingView tools need CDP on 9222, MT5 tools need the
 bridge on 8765, and neither should fail because the other is closed.
@@ -124,6 +124,32 @@ the calendar file predates that conversion and the offset is unknown; re-run
   weekday or hour. Answers "when do I lose money", not just "how much".
   Pass `starting_balance` for drawdown percentages; without it they are null
   rather than computed against an invented base.
+
+### "What would my strategy do?"
+
+Five tools drive a strategy engine. All read-only — they describe what a
+strategy *would* do; none can place an order.
+
+1. `mt5_setups` → detected entry signals with **no P&L attached**. Check these
+   against a chart first: if the detectors find the wrong things, no amount of
+   parameter tuning fixes it
+2. `mt5_backtest` → those signals replayed with stops, targets, partials and
+   the breakeven trail
+3. `mt5_sweep` → every parameter combination judged on bars it was not chosen
+   on. Slow — thirty configurations by default
+4. `mt5_paper` → what the strategy would be doing right now
+5. `mt5_reconcile` → signals against actual fills: followed, missed, and
+   traded-without-a-signal
+
+All five take the same config knobs (`conditions`, `mode`, `required`,
+`confirmation`, `buffer_pips`, `risk_pct`, `target_r`, `partial_pct`,
+`partial_at_r`, `trail`). **`trail: "none"` disables the breakeven trail** —
+the control case for testing whether trailing early helps or hurts.
+
+Two things the backtest refuses to do, because each flatters a strategy:
+entry fills at the *next* bar open rather than the confirmation close, and a
+bar containing both stop and target resolves as the **stop** (bar data cannot
+order two intrabar touches).
 
 ### Comparing TradingView against the broker
 The same instrument has different names in each system — `FX:XAUUSD` on

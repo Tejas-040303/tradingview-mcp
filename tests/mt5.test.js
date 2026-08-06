@@ -218,3 +218,93 @@ describe('mt5 client — error mapping', () => {
     assert.deepEqual(out, payload);
   });
 });
+
+describe('mt5 client — strategy routes', () => {
+  test('every strategy route encodes the symbol', async () => {
+    for (const call of [mt5.setups, mt5.backtest, mt5.sweep, mt5.paper, mt5.reconcile]) {
+      const s = stub();
+      await call({ symbol: 'GOLD.i#', _deps: { fetch: s.fetch } });
+      assert.ok(s.last().url.includes('GOLD.i%23'),
+        `${call.name} left the '#' unencoded, so the bridge sees only GOLD.i`);
+    }
+  });
+
+  test('trail "none" survives as text rather than being dropped', async () => {
+    // The control case for the whole sweep. query() drops null and '', so
+    // sending null here would silently leave the trail at its default and
+    // compare a config against itself.
+    const s = stub();
+    await mt5.backtest({ symbol: 'GOLD.i#', trail: 'none', _deps: { fetch: s.fetch } });
+    assert.strictEqual(params(s.last().url).get('trail'), 'none');
+  });
+
+  test('a numeric trail is still sent', async () => {
+    const s = stub();
+    await mt5.backtest({ symbol: 'GOLD.i#', trail: 0.5, _deps: { fetch: s.fetch } });
+    assert.strictEqual(params(s.last().url).get('trail'), '0.5');
+  });
+
+  test('an unset trail is omitted so the bridge default applies', async () => {
+    const s = stub();
+    await mt5.backtest({ symbol: 'GOLD.i#', _deps: { fetch: s.fetch } });
+    assert.strictEqual(params(s.last().url).get('trail'), null);
+  });
+
+  test('config knobs reach the bridge unchanged', async () => {
+    const s = stub();
+    await mt5.sweep({
+      symbol: 'GOLD.i#', conditions: 'fvg,liquidity_sweep', required: 'liquidity_sweep',
+      mode: 'at_least', min_conditions: 2, target_r: 3, risk_pct: 0.5,
+      buffer_pips: 10, axes: 'target.r:2,3', split: 0.6,
+      _deps: { fetch: s.fetch },
+    });
+    const q = params(s.last().url);
+    assert.strictEqual(q.get('conditions'), 'fvg,liquidity_sweep');
+    assert.strictEqual(q.get('required'), 'liquidity_sweep');
+    assert.strictEqual(q.get('mode'), 'at_least');
+    assert.strictEqual(q.get('min_conditions'), '2');
+    assert.strictEqual(q.get('target_r'), '3');
+    assert.strictEqual(q.get('axes'), 'target.r:2,3');
+    assert.strictEqual(q.get('split'), '0.6');
+  });
+
+  test('boolean flags default to off rather than being sent as "false"', async () => {
+    // The bridge reads truthiness, so a literal "false" would read as true.
+    const s = stub();
+    await mt5.backtest({ symbol: 'GOLD.i#', _deps: { fetch: s.fetch } });
+    const q = params(s.last().url);
+    for (const flag of ['trades', 'skipped', 'compound']) {
+      assert.strictEqual(q.get(flag), null, `${flag} should be omitted when off`);
+    }
+  });
+
+  test('boolean flags are sent when asked for', async () => {
+    const s = stub();
+    await mt5.backtest({ symbol: 'GOLD.i#', trades: true, _deps: { fetch: s.fetch } });
+    assert.strictEqual(params(s.last().url).get('trades'), '1');
+  });
+
+  test('paper and reconcile carry their own options', async () => {
+    const s = stub();
+    await mt5.paper({ symbol: 'GOLD.i#', recent: 10, _deps: { fetch: s.fetch } });
+    assert.strictEqual(params(s.last().url).get('recent'), '10');
+
+    const r = stub();
+    await mt5.reconcile({ symbol: 'GOLD.i#', tolerance: 600, detail: true,
+      _deps: { fetch: r.fetch } });
+    assert.strictEqual(params(r.last().url).get('tolerance'), '600');
+    assert.strictEqual(params(r.last().url).get('detail'), '1');
+  });
+
+  test('each route hits its own path', async () => {
+    const expected = [
+      [mt5.setups, '/setups'], [mt5.backtest, '/backtest'], [mt5.sweep, '/sweep'],
+      [mt5.paper, '/paper'], [mt5.reconcile, '/reconcile'],
+    ];
+    for (const [call, path] of expected) {
+      const s = stub();
+      await call({ symbol: 'GOLD.i#', _deps: { fetch: s.fetch } });
+      assert.strictEqual(new URL(s.last().url).pathname, path);
+    }
+  });
+});

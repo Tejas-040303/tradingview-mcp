@@ -221,7 +221,7 @@ With the bridge running, open:
 http://127.0.0.1:8765/
 ```
 
-Two tabs on one page, no navigation between them:
+Three tabs on one page, no navigation between them:
 
 - **Status** — account, open positions, pending orders, realised P&L by period,
   and a news blackout banner. Polls every 5s.
@@ -230,10 +230,15 @@ Two tabs on one page, no navigation between them:
   heatmaps, session/symbol/weekday/exit breakdowns, holding-time and
   position-size analysis, P&L distribution, and a virtualised trade explorer
   with CSV/JSON export.
+- **Bot** — the simulated strategy: the open paper position with its stop,
+  target and lot, any confirmation waiting on an entry bar, the detected setups
+  list, and the backtest behind them. The setups table deliberately carries no
+  profit column — it is the list to check against a chart, and a P&L figure
+  there invites reading it as a result.
 
 Read-only throughout — the page cannot place, modify or close anything.
 
-The Analytics tab is a React app built by the launcher on first run. If that
+The Analytics and Bot tabs are a React app built by the launcher on first run. If that
 build is skipped or fails, `/` falls back to a plain no-build page, and both
 fallbacks stay reachable at `/dashboard/index.html` and
 `/dashboard/history.html`.
@@ -445,7 +450,7 @@ Read `line.new()`, `label.new()`, `table.new()`, `box.new()` output from any vis
 | `ui_open_panel` / `ui_click` / `ui_evaluate` | UI automation |
 | `tv_launch` / `tv_health_check` / `tv_discover` | Connection management |
 
-## Tool Reference — MT5 (13 read-only tools)
+## Tool Reference — MT5 (19 read-only tools)
 
 Served by the separate `mt5` server. Requires `mt5-bridge/bridge.py` running. **None of these can open, modify or close a position.**
 
@@ -463,6 +468,11 @@ Served by the separate `mt5` server. Requires `mt5-bridge/bridge.py` running. **
 | `mt5_analytics` | Expectancy, payoff ratio, drawdown, streaks, and performance by session / exit reason / symbol / hour | ~2-5 KB |
 | `mt5_calendar` | Scheduled events with importance, forecast, previous, `actual` | ~2-4 KB |
 | `mt5_blackout` | **"Is it safe to act right now"** — one deterministic answer | ~600 B |
+| `mt5_setups` | Entry signals the strategy detects, **no P&L attached** — the checkpoint before any backtest number matters | ~2-6 KB |
+| `mt5_backtest` | Those signals replayed with stops, targets, partials and the breakeven trail | ~1-2 KB |
+| `mt5_sweep` | Every parameter combination judged on bars it was not chosen on. **Slow** — thirty configurations by default | ~5-15 KB |
+| `mt5_paper` | What the strategy would be doing right now: open position, pending confirmation, recent trades | ~2-4 KB |
+| `mt5_reconcile` | Signals against actual fills: followed, missed, discretionary | ~1-3 KB |
 
 Two things worth knowing before building on these:
 
