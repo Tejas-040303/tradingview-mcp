@@ -256,6 +256,7 @@ mt5-bridge/             Python, stdlib only
 dashboard-app/          React source (Vite + Tailwind + Recharts + TanStack)
                         Tabs: Status (/overview), Analytics (/history),
                         Bot (/paper + /setups + /backtest)
+                        Research (/sweep + /reconcile)
 scripts/start.js        One-command launcher
 ```
 

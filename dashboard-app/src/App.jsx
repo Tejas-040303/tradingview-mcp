@@ -1,6 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Activity, BarChart3, Bot, Gauge } from 'lucide-react';
+import { Activity, BarChart3, Bot, FlaskConical, Gauge } from 'lucide-react';
 import FilterBar from '@/components/FilterBar';
 import HeroStats, { HeroSkeleton } from '@/components/HeroStats';
 import Insights, { LockedPanels } from '@/components/Insights';
@@ -15,6 +15,7 @@ const Charts = lazy(() => import('@/components/Charts.jsx').then(m => ({ default
 const Sections = lazy(() => import('@/components/Sections.jsx'));
 // The Bot tab pulls three strategy routes and is not on the first paint path.
 const BotView = lazy(() => import('@/components/BotView.jsx'));
+const ResearchView = lazy(() => import('@/components/ResearchView.jsx'));
 
 const DEFAULT_FILTERS = { period: '30', limit: 100, offset: 0 };
 
@@ -22,6 +23,7 @@ const VIEWS = [
   { id: 'status', label: 'Status', icon: Gauge, hint: 'Live account · polls every 5s' },
   { id: 'analytics', label: 'Analytics', icon: BarChart3, hint: 'Closed trade history' },
   { id: 'bot', label: 'Bot', icon: Bot, hint: 'Simulated strategy · read-only' },
+  { id: 'research', label: 'Research', icon: FlaskConical, hint: 'Sweeps and reconciliation' },
 ];
 
 const VIEW_IDS = VIEWS.map(v => v.id);
@@ -130,6 +132,12 @@ export default function App() {
         {view === 'bot' && (
           <Suspense fallback={<Card><Skeleton className="h-64 w-full" /></Card>}>
             <BotView />
+          </Suspense>
+        )}
+
+        {view === 'research' && (
+          <Suspense fallback={<Card><Skeleton className="h-64 w-full" /></Card>}>
+            <ResearchView />
           </Suspense>
         )}
 

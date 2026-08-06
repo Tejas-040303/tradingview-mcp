@@ -221,7 +221,7 @@ With the bridge running, open:
 http://127.0.0.1:8765/
 ```
 
-Three tabs on one page, no navigation between them:
+Four tabs on one page, no navigation between them:
 
 - **Status** — account, open positions, pending orders, realised P&L by period,
   and a news blackout banner. Polls every 5s.
@@ -235,10 +235,15 @@ Three tabs on one page, no navigation between them:
   list, and the backtest behind them. The setups table deliberately carries no
   profit column — it is the list to check against a chart, and a P&L figure
   there invites reading it as a result.
+- **Research** — parameter sweeps and signal-versus-fill reconciliation. The
+  sweep is opt-in behind a button because it is the slowest route on the
+  bridge, and its verdict leads rather than its table: a leaderboard always has
+  a winner, so when the result cannot be endorsed the rows render subdued with
+  the reason above them.
 
 Read-only throughout — the page cannot place, modify or close anything.
 
-The Analytics and Bot tabs are a React app built by the launcher on first run. If that
+The Analytics, Bot and Research tabs are a React app built by the launcher on first run. If that
 build is skipped or fails, `/` falls back to a plain no-build page, and both
 fallbacks stay reachable at `/dashboard/index.html` and
 `/dashboard/history.html`.

@@ -152,6 +152,26 @@ export async function fetchBacktest(cfg, signal) {
   return readJson(await fetch(`/backtest?${params}`, { cache: 'no-store', signal }));
 }
 
+/**
+ * The parameter sweep.
+ *
+ * Never fetched on mount: the default grid is thirty configurations replayed
+ * over the whole window, which is by far the slowest thing the bridge does.
+ */
+export async function fetchSweep(cfg, signal) {
+  const params = strategyQuery(cfg);
+  for (const key of ['axes', 'split', 'min_trades']) {
+    if (cfg[key] !== undefined && cfg[key] !== '') params.set(key, String(cfg[key]));
+  }
+  return readJson(await fetch(`/sweep?${params}`, { cache: 'no-store', signal }));
+}
+
+export async function fetchReconcile(cfg, signal) {
+  const params = strategyQuery(cfg);
+  if (cfg.tolerance) params.set('tolerance', String(cfg.tolerance));
+  return readJson(await fetch(`/reconcile?${params}`, { cache: 'no-store', signal }));
+}
+
 export const CONDITION_LABELS = {
   fvg: 'Fair value gap',
   liquidity_sweep: 'Liquidity sweep',
