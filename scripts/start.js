@@ -12,6 +12,7 @@
  *   node scripts/start.js --no-tv         # bridge only
  *   node scripts/start.js --no-bridge     # TradingView only
  *   node scripts/start.js --no-journal    # skip the write service
+ *   node scripts/start.js --exec          # also start execution (disarmed)
  *   node scripts/start.js --no-dashboard  # skip the React build
  *   node scripts/start.js --status        # report what is up, start nothing
  *   node scripts/start.js --verbose       # stream all child output, not just errors
@@ -35,6 +36,7 @@ const BRIDGE_PORT = Number(process.env.MT5_BRIDGE_PORT) || 8765;
 // bridge's guarantee is that it cannot be made to write, and merging the two
 // would spend that to save a port number.
 const JOURNAL_PORT = Number(process.env.MT5_JOURNAL_PORT) || 8766;
+const EXEC_PORT = Number(process.env.MT5_EXEC_PORT) || 8767;
 const READY_TIMEOUT_MS = Number(process.env.START_TIMEOUT_MS) || 60000;
 
 const args = new Set(process.argv.slice(2));
@@ -42,6 +44,10 @@ const opts = {
   tv: !args.has('--no-tv'),
   bridge: !args.has('--no-bridge'),
   journal: !args.has('--no-journal'),
+  // Opt-in, unlike everything else here. The other two services cannot place
+  // an order however they are misused; this one can, so starting it is a
+  // decision rather than a default.
+  exec: args.has('--exec'),
   dashboard: !args.has('--no-dashboard'),
   statusOnly: args.has('--status'),
   verbose: args.has('--verbose') || args.has('-v'),
@@ -86,6 +92,7 @@ async function probe(url, timeoutMs = 1500) {
 const tvUp = () => probe(`http://127.0.0.1:${CDP_PORT}/json/version`);
 const bridgeUp = () => probe(`http://127.0.0.1:${BRIDGE_PORT}/health`);
 const journalUp = () => probe(`http://127.0.0.1:${JOURNAL_PORT}/health`);
+const execUp = () => probe(`http://127.0.0.1:${EXEC_PORT}/status`);
 
 async function waitUntil(check, label, timeoutMs = READY_TIMEOUT_MS) {
   const deadline = Date.now() + timeoutMs;
@@ -265,13 +272,16 @@ function pythonCommand() {
 }
 
 async function status() {
-  const [tv, bridge, journal] = await Promise.all([tvUp(), bridgeUp(), journalUp()]);
+  const [tv, bridge, journal, exec] = await Promise.all(
+    [tvUp(), bridgeUp(), journalUp(), execUp()]);
   console.log('');
   console.log(`  TradingView CDP :${CDP_PORT}   ${tv ? green('up') : yellow('down')}`);
   console.log(`  MT5 bridge      :${BRIDGE_PORT}   ${bridge ? green('up') : yellow('down')}   ${dim('read-only')}`);
   console.log(`  Journal         :${JOURNAL_PORT}   ${journal ? green('up') : yellow('down')}   ${dim('writes a local file; cannot trade')}`);
+  console.log(`  Execution       :${EXEC_PORT}   ${exec ? green('up') : dim('not running')}   ${
+    exec ? red('CAN PLACE ORDERS — disarmed until armed') : dim('start with --exec')}`);
   console.log('');
-  return { tv, bridge, journal };
+  return { tv, bridge, journal, exec };
 }
 
 async function main() {
@@ -306,6 +316,13 @@ async function main() {
     await waitUntil(journalUp, 'journal', 20000);
   } else if (opts.journal) {
     log('journal', green('already running — left alone'));
+  }
+
+  if (opts.exec && !initial.exec) {
+    log('exec', `starting execution_service.py on :${EXEC_PORT} ${dim('(disarmed)')}`);
+    run('exec', pythonCommand(), ['execution_service.py', '--port', String(EXEC_PORT)],
+        { cwd: join(ROOT, 'mt5-bridge') });
+    await waitUntil(execUp, 'exec', 20000);
   }
 
   if (opts.bridge && !initial.bridge) {
@@ -374,9 +391,14 @@ function printEndpoints(state) {
   console.log(dim('    /analytics  /calendar  /blackout'));
   console.log(dim('    /setups  /backtest  /sweep  /paper  /reconcile'));
   console.log('');
-  console.log('  Journal routes (the only writable service)');
+  console.log('  Journal routes (writes a local file, cannot trade)');
   console.log(dim('    GET  /health  /summary  /signals'));
   console.log(dim('    POST /signals  /decision  /trade  /screenshot  /prune'));
+  console.log('');
+  console.log('  Execution routes (the only service that can place an order)');
+  console.log(dim('    GET  /status         POST /arm  /disarm  /order'));
+  console.log(dim('    Disarmed at startup. Arming expires, defaults to dry run'));
+  console.log(dim('    and to demo accounts only.'));
   console.log('');
   console.log('  Logs');
   console.log(dim(`    ${join(LOG_DIR, 'bridge.log')}`));

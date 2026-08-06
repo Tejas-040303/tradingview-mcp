@@ -169,6 +169,18 @@ skipped signals and see what they would have done.
 `POST /prune` is a dry run unless given `{"apply": true}`, and there is no
 delete route.
 
+### Execution — the only thing that can move money
+
+A **fourth process** (`mt5-bridge/execution_service.py`, port 8767), started
+only with `--exec`. No MCP tools, deliberately: placing orders should be an
+explicit human act, not something reachable from a conversation.
+
+Defaults: disarmed, dry run, demo only, expiring arm window, symbol allowlist,
+stop required. It contains no strategy and cannot import the detectors.
+
+If asked to place a trade, do not try. Point at `POST /arm` then `POST /order`
+and let the person run them.
+
 ### Comparing TradingView against the broker
 The same instrument has different names in each system — `FX:XAUUSD` on
 TradingView, `GOLD.i#` on XM. Use `mt5_symbol_search` to find the broker's name;

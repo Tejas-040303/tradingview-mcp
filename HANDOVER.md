@@ -253,7 +253,9 @@ mt5-bridge/             Python, stdlib only
   reconcile.py          Pure: signals vs fills — followed, missed, discretionary
   paper.py              Pure: live view, dropping the bar still forming
   journal.py            Pure: SQLite journal — signals, decisions, retention
-  journal_service.py    The ONLY writable service. Own process, own port (8766)
+  journal_service.py    Writes a local file, cannot trade. Own port (8766)
+  execution.py          Pure: every guard deciding whether an order may be sent
+  execution_service.py  The ONLY process that can place an order. Port 8767
   dashboard/            Plain HTML fallback pages + built React bundle (app/)
 dashboard-app/          React source (Vite + Tailwind + Recharts + TanStack)
                         Tabs: Status (/overview), Analytics (/history),
@@ -266,7 +268,7 @@ scripts/start.js        One-command launcher
 is testable without a terminal. Every `mt5-bridge/*.py` module except
 `mt5_client.py` imports nothing platform-specific and runs on Linux in CI.
 
-**Test counts:** 535 Python, 22 Node MT5, plus the wider Node suite. CI runs
+**Test counts:** 597 Python, 22 Node MT5, plus the wider Node suite. CI runs
 lint, both suites, and a dashboard build that verifies the bundle is actually
 servable — a wrong `base` path builds cleanly and produces a blank page.
 
@@ -285,6 +287,11 @@ servable — a wrong `base` path builds cleanly and produces a blank page.
   the same, or signals appear and vanish as the minute progresses. A machine
   clock running *fast* is the dangerous skew — it keeps a bar that has not
   closed. A slow clock merely drops one that had.
+- **Three processes, three capabilities: read / write-a-file / trade.** Keep it
+  that way. If you want the execution service to decide *what* to trade, put
+  the deciding somewhere else and have it POST an explicit order — the reason
+  a detector bug cannot place an order today is that the detectors are not
+  importable from `execution_service.py`, and a test enforces it.
 - **The journal is a separate process for a reason.** `bridge.py` has no
   `do_POST` and there is a test asserting it stays that way. If you find
   yourself wanting to add a write route to the bridge "just this once", add it

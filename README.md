@@ -596,6 +596,52 @@ Three things it is careful about:
   losing the fact that one existed. There is no delete route at all: a record
   you can quietly remove after a bad trade is not a record.
 
+### Execution — the only process that can move money
+
+Three processes, three capabilities. `bridge.py` reads and cannot write. The
+journal writes a local file and cannot trade. `execution_service.py` can trade
+and does nothing else. Two of the three are incapable of the failure that
+matters, so only one needs the paranoid review.
+
+**It contains no strategy.** It never decides *what* to trade — something
+outside hands it an explicit order and it refuses or forwards. A bug in the
+detectors cannot become a bug that places orders, because the detectors are not
+importable from there, and a test asserts it.
+
+Started only with `npm run start:all -- --exec`. The other services start by
+default; this one is a decision.
+
+```
+GET  /status          POST /arm  /disarm  /order
+```
+
+Every default is the safe one, and each has to be overridden deliberately:
+
+| Default | Why |
+|---|---|
+| **Disarmed** | Nothing can be placed until `POST /arm` |
+| **Arming expires** | An arm-once flag is one nobody remembers to clear |
+| **Dry run** | Armed is not the same as firing |
+| **Demo accounts only** | `allow_live` must be set at arm time |
+| **Symbols are an allowlist** | Empty means none, never everything |
+| **Stop required** | No configuration allows an order without one |
+
+Arming also **names the account**, and the terminal's own login must match it —
+a session pointed somewhere you did not expect refuses rather than trades. On
+top of that sit a max lot, a max risk %, a max open position count, a daily
+loss limit that ends the session rather than letting it be won back, a news
+blackout check, and a `client_id` guard so a retried request cannot fill twice.
+
+Two failures resolve toward stopping rather than trading: an unreadable
+terminal is a refusal ("refusing rather than trading blind"), and an unwritable
+audit log is a refusal too — an order nobody can reconstruct afterwards should
+not have happened. **Disarming is the exception**: it never fails, because a
+kill switch with preconditions is not a kill switch.
+
+All of that policy lives in `execution.py`, which is pure — no MetaTrader5, no
+network, no filesystem — and carries 38 tests. `execution_service.py` holds
+exactly one function that can place an order.
+
 Setup, routes, and the full timestamp contract: **[mt5-bridge/README.md](mt5-bridge/README.md)**.
 
 ## Context Management

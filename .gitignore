@@ -22,3 +22,6 @@ mt5-bridge/dashboard/app/
 
 # The journal is personal trading data, not source.
 mt5-bridge/journal/
+
+# Order audit log — a record of real trading activity.
+mt5-bridge/execution/
