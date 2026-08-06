@@ -37,6 +37,30 @@ def _iso(ts):
     return _dt.datetime.fromtimestamp(ts, _dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
+def _partial_lot(remaining, partial_pct, spec):
+    """
+    The lot to close for a partial, or None when a partial is impossible.
+
+    Rounded **down** to the broker's step, never up: `round(0.01 * 0.5, 2)`
+    returns 0.01, so an innocent-looking "take 50%" closes the entire position.
+    Both the piece taken and the piece left must be at least one minimum lot —
+    a broker rejects either side being smaller, and pretending otherwise makes
+    the whole backtest describe trades that cannot be placed.
+    """
+    step, minimum = spec['lot_step'], spec['min_lot']
+    wanted = remaining * partial_pct / 100
+    lot = round(int(wanted / step + 1e-9) * step, 8)
+    left = round(remaining - lot, 8)
+
+    if lot < minimum:
+        return None
+    # Leaving nothing is a full close, which is fine. Leaving a sliver smaller
+    # than one lot is an order the broker rejects.
+    if 0 < left < minimum:
+        return None
+    return lot
+
+
 def _pnl(direction, entry, exit_price, lot, contract_size):
     delta = (exit_price - entry) if direction == 'long' else (entry - exit_price)
     return delta * lot * contract_size
@@ -126,6 +150,7 @@ def _walk(bars, start, plan, setup, symbol, cfg):
     banked = 0.0
     fills = []            # (price, lot) for the volume-weighted exit price
     partial_done = False
+    partial_skipped = None
     stop_kind = 'initial'
     trail_r = cfg['manage']['trail_to_be_at_r']
     partial_r = cfg['manage']['partial_at_r']
@@ -144,22 +169,35 @@ def _walk(bars, start, plan, setup, symbol, cfg):
             fills.append((stop, remaining))
             banked += _pnl(setup['direction'], entry, stop, remaining, spec['contract_size'])
             return {'exit_index': i, 'reason': STOP, 'fills': fills, 'net': banked,
-                    'stop_kind': stop_kind, 'partial_taken': partial_done}
+                    'stop_kind': stop_kind, 'partial_taken': partial_done,
+                    'partial_skipped': partial_skipped}
 
         if partial_pct and not partial_done and partial_r:
             level = entry + r * partial_r if long_side else entry - r * partial_r
             if reached(bar, level):
-                lot = round(remaining * partial_pct / 100, 2)
-                if lot > 0:
+                lot = _partial_lot(remaining, partial_pct, spec)
+                partial_done = True
+                if lot is None:
+                    # A position of one minimum lot cannot be halved, and
+                    # rounding the request to a whole lot closes everything at
+                    # 1R — which caps every winner at exactly +1R while losers
+                    # stay at -1R, forcing negative expectancy no matter how
+                    # good the entry is. The position is held instead, and the
+                    # skip is recorded rather than silently reinterpreted.
+                    partial_skipped = (
+                        f'{remaining} lot is the smallest tradeable size for '
+                        f'{symbol} and cannot be split, so the full position '
+                        f'was carried to the target')
+                else:
                     fills.append((level, lot))
                     banked += _pnl(setup['direction'], entry, level, lot,
                                    spec['contract_size'])
-                    remaining = round(remaining - lot, 2)
-                partial_done = True
-                if remaining <= 0:
-                    return {'exit_index': i, 'reason': TARGET, 'fills': fills,
-                            'net': banked, 'stop_kind': stop_kind,
-                            'partial_taken': True}
+                    remaining = round(remaining - lot, 8)
+                    if remaining <= 0:
+                        return {'exit_index': i, 'reason': TARGET, 'fills': fills,
+                                'net': banked, 'stop_kind': stop_kind,
+                                'partial_taken': True,
+                                'partial_skipped': partial_skipped}
 
         if trail_r and stop_kind == 'initial':
             level = entry + r * trail_r if long_side else entry - r * trail_r
@@ -172,7 +210,8 @@ def _walk(bars, start, plan, setup, symbol, cfg):
             banked += _pnl(setup['direction'], entry, target, remaining,
                            spec['contract_size'])
             return {'exit_index': i, 'reason': TARGET, 'fills': fills, 'net': banked,
-                    'stop_kind': stop_kind, 'partial_taken': partial_done}
+                    'stop_kind': stop_kind, 'partial_taken': partial_done,
+                    'partial_skipped': partial_skipped}
 
     # Ran out of bars with the position open. Marking to the last close is a
     # valuation, not a trade, and the caller flags it as such.
@@ -181,7 +220,8 @@ def _walk(bars, start, plan, setup, symbol, cfg):
     banked += _pnl(setup['direction'], entry, last['close'], remaining,
                    spec['contract_size'])
     return {'exit_index': len(bars) - 1, 'reason': END, 'fills': fills,
-            'net': banked, 'stop_kind': stop_kind, 'partial_taken': partial_done}
+            'net': banked, 'stop_kind': stop_kind, 'partial_taken': partial_done,
+            'partial_skipped': partial_skipped}
 
 
 def simulate(bars, symbol, config=None, balance=1000.0, compound=False, setups=None):
@@ -267,6 +307,10 @@ def simulate(bars, symbol, config=None, balance=1000.0, compound=False, setups=N
                 # bimodal and unreadable.
                 'stop_kind': result['stop_kind'],
                 'partial_taken': result['partial_taken'],
+                # Set when the position was too small to split. Without it the
+                # config says "50% partial" and the trades quietly say
+                # otherwise.
+                'partial_skipped': result.get('partial_skipped'),
                 'balance_after': balance_now,
             },
         })
