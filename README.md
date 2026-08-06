@@ -558,6 +558,44 @@ reported separately. The difference between a followed signal's simulated and
 real result is its own diagnostic — the execution cost, and the reason a
 backtest saying 1.2R can sit above an account saying 0.4R.
 
+### The journal (the only writable service)
+
+`journal_service.py` runs as its **own process on its own port** (8766). That
+separation is the architecture, not an accident: `bridge.py` answers GET and
+returns 405 for anything else, and a reader that cannot be made to write is a
+reader nobody has to audit. Adding POST routes to it would spend that guarantee
+to save a port number.
+
+What the journal can write is a **local SQLite file**. It imports no broker
+client, and a test asserts it never will.
+
+```
+GET  /health  /summary  /signals
+POST /signals  /decision  /trade  /screenshot  /prune
+```
+
+It records what MetaTrader structurally cannot: the setups you **passed on**,
+and why. A skipped setup leaves no trace in any broker's history, so the two
+questions most likely to explain a losing account — were the ones I skipped the
+good ones, and why did I close early — are unanswerable unless something writes
+them down at the time.
+
+Three things it is careful about:
+
+- **A self-report is not a fact.** "Skipped for news" records what was *said*,
+  and a reason given after the outcome is known may be a rationalisation.
+  Fields are named `skip_reasons_claimed` and `exit_kinds_claimed` so nothing
+  downstream can quietly promote them into measurements. What *is* evidence is
+  the join: replay the skipped signals and see what they would have done.
+- **Coverage leads.** The summary reports how many signals have no decision
+  recorded, because a journal covering a fifth of them cannot support a claim
+  about which ones get skipped.
+- **Retention is a dry run by default.** `POST /prune` lists the screenshot
+  files it *would* delete; deleting requires `{"apply": true}`. The database
+  rows survive with `pruned_at` set — losing the picture is not the same as
+  losing the fact that one existed. There is no delete route at all: a record
+  you can quietly remove after a bad trade is not a record.
+
 Setup, routes, and the full timestamp contract: **[mt5-bridge/README.md](mt5-bridge/README.md)**.
 
 ## Context Management

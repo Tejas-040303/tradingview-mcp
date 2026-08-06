@@ -151,6 +151,24 @@ entry fills at the *next* bar open rather than the confirmation close, and a
 bar containing both stop and target resolves as the **stop** (bar data cannot
 order two intrabar touches).
 
+### The journal — the one thing that can write
+
+A **third process** (`mt5-bridge/journal_service.py`, port 8766) records what
+MT5 structurally cannot: the setups that were *passed on*, and why. It has no
+MCP tools yet; talk to it over HTTP.
+
+It writes a local SQLite file and nothing else — no broker client is imported,
+and `bridge.py` still has no `do_POST`. Keep it that way: the read bridge's
+value is that it cannot be made to write.
+
+`skip_reasons_claimed` and `exit_kinds_claimed` are named that way on purpose.
+A reason given after the outcome is known may be a rationalisation, so never
+present a self-report as a measurement. The evidence is the *join* — replay the
+skipped signals and see what they would have done.
+
+`POST /prune` is a dry run unless given `{"apply": true}`, and there is no
+delete route.
+
 ### Comparing TradingView against the broker
 The same instrument has different names in each system — `FX:XAUUSD` on
 TradingView, `GOLD.i#` on XM. Use `mt5_symbol_search` to find the broker's name;
