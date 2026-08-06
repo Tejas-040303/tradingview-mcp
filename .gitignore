@@ -19,3 +19,6 @@ logs/
 # Built dashboard bundle — produced by `npm run build` in dashboard-app/.
 # The launcher builds it on demand; committing bundles would mean reviewing minified diffs.
 mt5-bridge/dashboard/app/
+
+# The journal is personal trading data, not source.
+mt5-bridge/journal/

@@ -11,6 +11,7 @@
  *   node scripts/start.js                 # start everything missing
  *   node scripts/start.js --no-tv         # bridge only
  *   node scripts/start.js --no-bridge     # TradingView only
+ *   node scripts/start.js --no-journal    # skip the write service
  *   node scripts/start.js --no-dashboard  # skip the React build
  *   node scripts/start.js --status        # report what is up, start nothing
  *   node scripts/start.js --verbose       # stream all child output, not just errors
@@ -30,12 +31,17 @@ const LOG_DIR = join(ROOT, 'logs');
 
 const CDP_PORT = Number(process.env.TV_CDP_PORT) || 9222;
 const BRIDGE_PORT = Number(process.env.MT5_BRIDGE_PORT) || 8765;
+// The journal is a separate process on a separate port on purpose: the read
+// bridge's guarantee is that it cannot be made to write, and merging the two
+// would spend that to save a port number.
+const JOURNAL_PORT = Number(process.env.MT5_JOURNAL_PORT) || 8766;
 const READY_TIMEOUT_MS = Number(process.env.START_TIMEOUT_MS) || 60000;
 
 const args = new Set(process.argv.slice(2));
 const opts = {
   tv: !args.has('--no-tv'),
   bridge: !args.has('--no-bridge'),
+  journal: !args.has('--no-journal'),
   dashboard: !args.has('--no-dashboard'),
   statusOnly: args.has('--status'),
   verbose: args.has('--verbose') || args.has('-v'),
@@ -79,6 +85,7 @@ async function probe(url, timeoutMs = 1500) {
 // ::1, which Electron's debug server does not listen on.
 const tvUp = () => probe(`http://127.0.0.1:${CDP_PORT}/json/version`);
 const bridgeUp = () => probe(`http://127.0.0.1:${BRIDGE_PORT}/health`);
+const journalUp = () => probe(`http://127.0.0.1:${JOURNAL_PORT}/health`);
 
 async function waitUntil(check, label, timeoutMs = READY_TIMEOUT_MS) {
   const deadline = Date.now() + timeoutMs;
@@ -258,12 +265,13 @@ function pythonCommand() {
 }
 
 async function status() {
-  const [tv, bridge] = await Promise.all([tvUp(), bridgeUp()]);
+  const [tv, bridge, journal] = await Promise.all([tvUp(), bridgeUp(), journalUp()]);
   console.log('');
   console.log(`  TradingView CDP :${CDP_PORT}   ${tv ? green('up') : yellow('down')}`);
-  console.log(`  MT5 bridge      :${BRIDGE_PORT}   ${bridge ? green('up') : yellow('down')}`);
+  console.log(`  MT5 bridge      :${BRIDGE_PORT}   ${bridge ? green('up') : yellow('down')}   ${dim('read-only')}`);
+  console.log(`  Journal         :${JOURNAL_PORT}   ${journal ? green('up') : yellow('down')}   ${dim('writes a local file; cannot trade')}`);
   console.log('');
-  return { tv, bridge };
+  return { tv, bridge, journal };
 }
 
 async function main() {
@@ -289,6 +297,16 @@ async function main() {
   }
 
   if (opts.dashboard) await ensureDashboard();
+
+  if (opts.journal && !initial.journal) {
+    log('journal', `starting journal_service.py on :${JOURNAL_PORT}`);
+    run('journal', pythonCommand(),
+        ['journal_service.py', '--port', String(JOURNAL_PORT)],
+        { cwd: join(ROOT, 'mt5-bridge') });
+    await waitUntil(journalUp, 'journal', 20000);
+  } else if (opts.journal) {
+    log('journal', green('already running — left alone'));
+  }
 
   if (opts.bridge && !initial.bridge) {
     log('bridge', `starting bridge.py on :${BRIDGE_PORT}`);
@@ -342,19 +360,27 @@ function printEndpoints(state) {
   console.log('');
   console.log('  Endpoints');
   console.log(`    Dashboard      ${state.bridge ? green(`${bridge}/`) : dim(`${bridge}/ (bridge down)`)}`);
-  console.log(dim('                   Status and Analytics are tabs on that one page.'));
+  console.log(dim('                   Status, Analytics, Bot and Research are tabs on that one page.'));
   console.log(`    Fallback pages ${state.bridge ? dim(`${bridge}/dashboard/index.html · ${bridge}/dashboard/history.html`)
     : dim('(bridge down)')}`);
   console.log(`    Bridge API     ${state.bridge ? `${bridge}/health` : dim(`${bridge}/health (down)`)}`);
+  console.log(`    Journal API    ${state.journal ? `http://127.0.0.1:${JOURNAL_PORT}/summary`
+    : dim(`http://127.0.0.1:${JOURNAL_PORT}/summary (down)`)}`);
   console.log(`    TradingView    ${state.tv ? `${cdp}/json/version` : dim(`${cdp}/json/version (down)`)}`);
   console.log('');
   console.log('  Bridge routes');
   console.log(dim('    /overview  /history  /excursions  /health  /account  /symbols'));
   console.log(dim('    /positions  /orders  /quote  /bars  /deals  /trades'));
   console.log(dim('    /analytics  /calendar  /blackout'));
+  console.log(dim('    /setups  /backtest  /sweep  /paper  /reconcile'));
+  console.log('');
+  console.log('  Journal routes (the only writable service)');
+  console.log(dim('    GET  /health  /summary  /signals'));
+  console.log(dim('    POST /signals  /decision  /trade  /screenshot  /prune'));
   console.log('');
   console.log('  Logs');
   console.log(dim(`    ${join(LOG_DIR, 'bridge.log')}`));
+  console.log(dim(`    ${join(LOG_DIR, 'journal.log')}`));
   console.log(dim(`    ${join(LOG_DIR, 'tv.log')}`));
   console.log('');
   console.log(dim(`  Bound to 127.0.0.1 only — not reachable from other devices on your network.`));
