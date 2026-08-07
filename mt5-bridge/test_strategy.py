@@ -162,7 +162,15 @@ class TestMinimumBalance(unittest.TestCase):
 class TestSpecs(unittest.TestCase):
     def test_known_symbols_have_explicit_specs(self):
         self.assertEqual(spec_for(GOLD)['contract_size'], 100.0)
-        self.assertEqual(spec_for(GOLD)['pip'], 0.01)
+        # Gold's pip is 0.10. It was 0.01 here once, which made every
+        # pip-denominated setting wrong by ten while looking reasonable.
+        self.assertEqual(spec_for(GOLD)['pip'], 0.10)
+
+    def test_the_contract_maths_is_independent_of_the_pip(self):
+        # 0.01 lot, one dollar of movement, one dollar of P&L — unchanged by
+        # the pip correction, which is what makes that correction safe.
+        out = position_size(10_000.0, 1.0, GOLD, {'size': {'risk_pct': 0.01}})
+        self.assertEqual(out['risk'], 1.0)
 
     def test_unknown_symbols_fall_back_rather_than_crash(self):
         self.assertIsNotNone(spec_for('SOMETHING#')['contract_size'])

@@ -135,10 +135,35 @@ class TestSetupCache(unittest.TestCase):
 
 class TestVerdict(unittest.TestCase):
     def test_random_data_does_not_produce_a_trustworthy_edge(self):
-        # The test this module exists for. Thirty configurations on a random
-        # walk will always have a best one; the verdict must not endorse it.
-        out = sweep(random_walk(3000, seed=11), GOLD, DEFAULT_AXES, balance=5000)
-        self.assertFalse(out['summary']['trustworthy'])
+        # The test this module exists for, run across several seeds because a
+        # single one hid the bug: with only the correlation and median checks,
+        # two seeds in five endorsed a random-walk winner. One seed passing is
+        # not evidence that the guard works.
+        for seed in (3, 5, 11, 23, 41):
+            out = sweep(random_walk(3000, seed=seed), GOLD, DEFAULT_AXES,
+                        balance=5000)
+            self.assertFalse(out['summary'].get('trustworthy'),
+                             f'seed {seed} endorsed an edge in random data')
+
+    def test_the_noise_floor_rises_when_the_winner_has_fewer_trades(self):
+        # A config topping the table on fifteen volatile trades must clear a
+        # much higher bar than one doing it on two hundred — that asymmetry is
+        # the whole point of measuring the floor rather than fixing it.
+        from sweep import _noise_floor
+        thin = _noise_floor({'trades': 15, 'r_stdev': 1.8}, 30)
+        thick = _noise_floor({'trades': 200, 'r_stdev': 1.8}, 30)
+        self.assertGreater(thin, thick)
+
+    def test_the_floor_grows_with_the_number_of_configurations_searched(self):
+        from sweep import _noise_floor
+        few = _noise_floor({'trades': 100, 'r_stdev': 1.5}, 4)
+        many = _noise_floor({'trades': 100, 'r_stdev': 1.5}, 200)
+        self.assertGreater(many, few)
+
+    def test_an_unmeasurable_floor_is_none_rather_than_a_passed_test(self):
+        from sweep import _noise_floor
+        self.assertIsNone(_noise_floor({'trades': 100, 'r_stdev': None}, 30))
+        self.assertIsNone(_noise_floor({'trades': 1, 'r_stdev': 1.5}, 30))
 
     def test_a_losing_winner_is_never_endorsed(self):
         # The bug this catches: rank correlation on a random walk came out at
