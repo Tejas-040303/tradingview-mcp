@@ -155,6 +155,7 @@ def _walk(bars, start, plan, setup, symbol, cfg):
     trail_r = cfg['manage']['trail_to_be_at_r']
     partial_r = cfg['manage']['partial_at_r']
     partial_pct = cfg['manage']['partial_pct']
+    offset = cfg['manage'].get('trail_offset_price') or 0.0
 
     def reached(bar, price):
         return (bar['high'] >= price) if long_side else (bar['low'] <= price)
@@ -202,7 +203,11 @@ def _walk(bars, start, plan, setup, symbol, cfg):
         if trail_r and stop_kind == 'initial':
             level = entry + r * trail_r if long_side else entry - r * trail_r
             if reached(bar, level):
-                stop, stop_kind = entry, 'breakeven'
+                # Not necessarily entry itself. An offset lets the stop clear
+                # the spread, so a "free" trade does not exit having paid the
+                # round trip.
+                stop = entry + offset if long_side else entry - offset
+                stop_kind = 'breakeven'
 
         hit_target = (bar['high'] >= target) if long_side else (bar['low'] <= target)
         if hit_target:
