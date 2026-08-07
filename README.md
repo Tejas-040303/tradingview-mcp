@@ -500,6 +500,7 @@ baked into a branch.
 | `/reconcile?symbol=GOLD.i%23` | What the strategy signalled against what the account actually did: followed, missed, and discretionary |
 | `/strategy1/setups?symbol=GOLD.i%23` | Strategy 1 (multi-timeframe liquidity sweep) detection, with its rejections |
 | `/strategy1/backtest?symbol=GOLD.i%23` | Strategy 1 replayed, with stops, structural targets and the spread-clearing trail |
+| `/strategy1/walkforward?symbol=GOLD.i%23` | Strategy 1's parameter grid across a chronological split, with the same noise floor `/sweep` applies |
 | `/paper?symbol=GOLD.i%23` | What the strategy would be doing right now — open position with its levels, a pending confirmation, recent closed trades |
 
 Both accept `conditions=fvg,liquidity_sweep`, `required=`, `mode=any|all|at_least`,
@@ -550,7 +551,18 @@ days of 3M ones, and every ancient sweep would then trigger against the first
 few entry bars — signals manufactured by the shape of the request rather than
 found in the market.
 
-Both routes report **rejections with reasons**, because "the strategy found
+`/strategy1/walkforward` splits by **time, not index**. Cutting six series each
+at a fraction of its own length puts the boundary at a different instant on
+every one — 70% of 84 four-hour bars and 70% of 6667 three-minute bars are not
+the same moment, and the halves would silently overlap. The entry timeframe
+defines one cut time and every series is sliced against it. The sweep
+timeframes carry a warm-up of earlier bars so swings can form, and those bars
+can only *detect*: a sweep older than the entry window is refused, so no signal
+crosses the boundary. Its default grid includes both controls — `trail_at_r:
+null` for "does trailing help at all" and `fallback: null` for "does MSS add
+anything".
+
+All three routes report **rejections with reasons**, because "the strategy found
 nothing" and "the target rule is too strict" produce the same trade count and
 are entirely different findings. If a timeframe has no history the strategy
 narrows rather than failing, and the missing ones are named.
