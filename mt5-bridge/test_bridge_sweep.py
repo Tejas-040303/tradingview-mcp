@@ -194,6 +194,24 @@ class TestRoutes(BridgeTest):
         self.assertEqual(out['setups'], 0)
         self.assertEqual(out['sweeps_found'], 0)
 
+    def test_walkforward_splits_and_reports_both_halves(self):
+        out = bridge.route('/strategy1/walkforward',
+                           q(symbol=GOLD, count=400, axes='target.min_r:2,3'))
+        self.assertTrue(out['success'])
+        self.assertEqual(out['configurations'], 2)
+        self.assertIn('cut_utc', out['split'])
+        self.assertIn('summary', out)
+
+    def test_walkforward_axis_values_keep_their_meaning(self):
+        # 'none' on the trail axis is the control case, and turning it into
+        # the string 'none' or the number 0 would delete the comparison.
+        out = bridge.route('/strategy1/walkforward',
+                           q(symbol=GOLD, count=400,
+                             axes='manage.trail_at_r:1.0,none'))
+        trails = [r['params']['manage.trail_at_r'] for r in out['rows']]
+        self.assertIn(None, trails)
+        self.assertIn(1.0, trails)
+
     def test_bar_counts_per_timeframe_are_reported(self):
         out = bridge.route('/strategy1/setups', q(symbol=GOLD, count=300))
         self.assertEqual(set(out['bars']), {'3', '15', '30', '60', '240'})

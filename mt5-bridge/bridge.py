@@ -32,6 +32,7 @@ import strategy
 import sweep
 import sweep_backtest
 import sweep_strategy
+import sweep_walkforward
 import insights as insight_rules
 import stops
 import stopsize
@@ -680,6 +681,27 @@ def route(path, params):
             result['skipped'] = out['skipped']
         return result
 
+    if path == '/strategy1/walkforward':
+        # Strategy 1 across a chronological split. Slow — the default grid is
+        # 24 configurations replayed on both halves — so it is never folded
+        # into another request.
+        symbol, config, bars_by_tf, window, unavailable = _sweep_bars(params)
+        axes = None
+        if _one(params, 'axes'):
+            axes = {}
+            for part in _one(params, 'axes').split('|'):
+                name, _, values = part.partition(':')
+                axes[name.strip()] = [_axis_value(v) for v in values.split(',')]
+        out = sweep_walkforward.walk_forward(
+            bars_by_tf, axes=axes, base=config,
+            split=float(_one(params, 'split', 0.7)),
+            balance=float(_one(params, 'balance', 1000)),
+            spread=float(_one(params, 'spread', sweep_backtest.DEFAULT_SPREAD)),
+            min_trades=int(_one(params, 'min_trades', 10)))
+        return {**out, 'symbol': symbol, 'window': window,
+                'bars': {tf: len(b) for tf, b in bars_by_tf.items()},
+                'unavailable_timeframes': unavailable}
+
     if path == '/paper':
         # What the strategy would be doing right now. Recomputed from bars on
         # every call, so a restart changes nothing and two callers agree.
@@ -934,7 +956,7 @@ def main():
 
     server = ThreadingHTTPServer(('127.0.0.1', args.port), Handler)
     print(f'Read-only bridge listening on http://127.0.0.1:{args.port}')
-    print('Routes: /overview /history /excursions /diagnose/stops /setups /backtest /sweep /paper /reconcile /strategy1/setups /strategy1/backtest /health'
+    print('Routes: /overview /history /excursions /diagnose/stops /setups /backtest /sweep /paper /reconcile /strategy1/setups /strategy1/backtest /strategy1/walkforward /health'
           ' /account /symbols /positions /orders /quote /bars /deals /trades'
           ' /analytics /calendar /blackout')
     try:

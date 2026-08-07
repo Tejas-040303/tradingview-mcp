@@ -56,8 +56,15 @@ def _set(config, path, value):
     node[parts[-1]] = value
 
 
-def expand(axes=None, base=None):
-    """Every combination of the axes, as full configs."""
+def expand(axes=None, base=None, validator=None):
+    """
+    Every combination of the axes, as full configs.
+
+    `validator` lets a different strategy screen its own grid — strategy 1 has
+    its own config shape and its own rules, and checking it against this one's
+    validator would reject every combination for fields it does not have.
+    """
+    validator = validate if validator is None else validator
     axes = DEFAULT_AXES if axes is None else axes
     configs = [copy.deepcopy(base or {})]
 
@@ -72,7 +79,7 @@ def expand(axes=None, base=None):
 
     # A config the validator rejects would report zero trades and read as "this
     # setting does not work" rather than "this setting is nonsense".
-    return [c for c in configs if not validate(c)]
+    return [c for c in configs if not validator(c)]
 
 
 def _label(config, axes):

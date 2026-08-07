@@ -254,6 +254,7 @@ mt5-bridge/             Python, stdlib only
   paper.py              Pure: live view, dropping the bar still forming
   sweep_strategy.py     Pure: strategy 1 detection, multi-timeframe
   sweep_backtest.py     Pure: strategy 1 replay, reusing simulate._walk
+  sweep_walkforward.py  Pure: strategy 1 grid, split by time not index
   journal.py            Pure: SQLite journal — signals, decisions, retention
   journal_service.py    Writes a local file, cannot trade. Own port (8766)
   execution.py          Pure: every guard deciding whether an order may be sent
@@ -270,7 +271,7 @@ scripts/start.js        One-command launcher
 is testable without a terminal. Every `mt5-bridge/*.py` module except
 `mt5_client.py` imports nothing platform-specific and runs on Linux in CI.
 
-**Test counts:** 684 Python, 22 Node MT5, plus the wider Node suite. CI runs
+**Test counts:** 710 Python, 22 Node MT5, plus the wider Node suite. CI runs
 lint, both suites, and a dashboard build that verifies the bundle is actually
 servable — a wrong `base` path builds cleanly and produces a blank page.
 

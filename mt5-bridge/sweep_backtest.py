@@ -26,6 +26,8 @@ Spread is a parameter here because bar data does not carry it. Live, it is read
 from the tick. A backtest run with `spread=0` is describing a broker that does
 not exist, so the value used is reported alongside the result.
 """
+import json
+
 import sweep_strategy as ss
 from simulate import END, STOP, _walk
 from strategy import spec_for
@@ -106,13 +108,32 @@ def size_for(balance, stop_distance, symbol, cfg, confluence=1):
             'risk_pct': round(risk / balance * 100, 3)}
 
 
-def backtest(bars_by_tf, config=None, balance=1000.0, spread=DEFAULT_SPREAD):
+def detection_key(config=None):
+    """
+    The part of a config that changes *which* setups exist.
+
+    Management and sizing do not: they decide what happens to a trade, not
+    whether it is found. A sweep over exits can therefore detect once and
+    replay many times. Keyed rather than assumed, because an axis can vary the
+    entry or the target and silently reusing another config's setups would be a
+    spectacular bug.
+    """
+    cfg = ss.merged(config)
+    return json.dumps({k: v for k, v in cfg.items() if k not in ('manage', 'size')},
+                      sort_keys=True, default=str)
+
+
+def backtest(bars_by_tf, config=None, balance=1000.0, spread=DEFAULT_SPREAD,
+             found=None):
     """
     Replay strategy 1 and report what it would have done.
 
     One position at a time. A setup arriving while a trade is open is recorded
     as skipped with its reason rather than stacked — that matches how this is
     traded and keeps risk per trade meaningful.
+
+    `found` accepts a precomputed `find_setups` result, so a sweep over
+    management parameters detects once instead of once per configuration.
     """
     cfg = ss.merged(config)
     problems = ss.validate(config)
@@ -121,7 +142,8 @@ def backtest(bars_by_tf, config=None, balance=1000.0, spread=DEFAULT_SPREAD):
 
     entry_tf = str(cfg['entry_timeframe'])
     entry_bars = bars_by_tf.get(entry_tf) or []
-    found = ss.find_setups(bars_by_tf, cfg)
+    if found is None:
+        found = ss.find_setups(bars_by_tf, cfg)
     if not entry_bars or not found['setups']:
         # The rejections are the whole story when nothing survived detection.
         # Returning an empty `skipped` here made "found nothing" and "the
