@@ -270,7 +270,7 @@ scripts/start.js        One-command launcher
 is testable without a terminal. Every `mt5-bridge/*.py` module except
 `mt5_client.py` imports nothing platform-specific and runs on Linux in CI.
 
-**Test counts:** 662 Python, 22 Node MT5, plus the wider Node suite. CI runs
+**Test counts:** 684 Python, 22 Node MT5, plus the wider Node suite. CI runs
 lint, both suites, and a dashboard build that verifies the bundle is actually
 servable — a wrong `base` path builds cleanly and produces a blank page.
 

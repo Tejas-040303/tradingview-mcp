@@ -498,6 +498,8 @@ baked into a branch.
 | `/backtest?symbol=GOLD.i%23` | The same signals replayed with stops, targets, partials and the breakeven trail, summarised as expectancy, win rate and average R |
 | `/sweep?symbol=GOLD.i%23` | Every parameter combination run on both halves of the window — the first 70% chooses, the last 30% judges |
 | `/reconcile?symbol=GOLD.i%23` | What the strategy signalled against what the account actually did: followed, missed, and discretionary |
+| `/strategy1/setups?symbol=GOLD.i%23` | Strategy 1 (multi-timeframe liquidity sweep) detection, with its rejections |
+| `/strategy1/backtest?symbol=GOLD.i%23` | Strategy 1 replayed, with stops, structural targets and the spread-clearing trail |
 | `/paper?symbol=GOLD.i%23` | What the strategy would be doing right now — open position with its levels, a pending confirmation, recent closed trades |
 
 Both accept `conditions=fvg,liquidity_sweep`, `required=`, `mode=any|all|at_least`,
@@ -533,6 +535,25 @@ management parameters reorder the R distribution the same way in any window,
 which looks like signal and is not.
 
 Axes are set from the URL: `axes=manage.trail_to_be_at_r:0.5,1.0,none|target.r:2,3`.
+
+**Strategy 1** is the multi-timeframe liquidity sweep: levels are swept on 4H,
+1H, 30M or 15M, and the entry trigger is found on 3M or 1M. Its two routes take
+`sweep_timeframes=`, `entry_timeframe=`, `trigger=`, `fallback=` (`none`
+disables the MSS fallback), `wait_bars=`, `max_uses=`, `buffer_price=`,
+`target_mode=`, `min_r=`, `partial_pct=`, `trail_at_r=`, `size_mode=`,
+`risk_pct=`, `fixed_lot=`, `balance=` and `spread=`.
+
+Bars are fetched over **one aligned window**: the entry timeframe sets the
+span, and each sweep timeframe gets only enough bars to cover it plus a
+lookback. A fixed count per timeframe would pull years of 4H candles against
+days of 3M ones, and every ancient sweep would then trigger against the first
+few entry bars — signals manufactured by the shape of the request rather than
+found in the market.
+
+Both routes report **rejections with reasons**, because "the strategy found
+nothing" and "the target rule is too strict" produce the same trade count and
+are entirely different findings. If a timeframe has no history the strategy
+narrows rather than failing, and the missing ones are named.
 
 `/paper` is reconstructed from bars on every call rather than accumulated in a
 state file. A paper runner that carries state drifts: restart it and the
