@@ -73,6 +73,10 @@ DEFAULT_CONFIG = {
         'partial_at_r': 1.0,
         # The parameter this whole exercise exists to test.
         'trail_to_be_at_r': 1.0,
+        # Where the trailed stop actually lands, relative to entry. Zero is
+        # true breakeven; a positive value clears the spread so the "free"
+        # trade is not one that pays the round trip to exit at cost.
+        'trail_offset_price': 0.0,
     },
     'target': {'r': 2.0},
 }
