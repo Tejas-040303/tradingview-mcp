@@ -12,10 +12,15 @@ So three things are always reported together:
     future into the past and is never done.
   * **The median configuration**, not just the best. If the winner barely
     clears the median, the ranking is noise wearing a leaderboard.
-  * **Rank correlation between the two halves.** This is the one that settles
-    it. If the ordering in-sample tells you nothing about the ordering
-    out-of-sample, the sweep has measured randomness, and no amount of
-    "the best config made 40%" changes that.
+  * **Rank correlation between the two halves.** If the ordering in-sample
+    tells you nothing about the ordering out-of-sample, the sweep has measured
+    randomness, and no amount of "the best config made 40%" changes that.
+  * **The best-of-N noise floor.** Picking the largest of thirty averages
+    scores well above zero even when nothing has an edge, and an earlier
+    version of this module missed that: two random-walk seeds in five came
+    back "trustworthy". The floor is measured from the winner's own trade
+    spread, so a config that tops the table on fifteen volatile trades has to
+    clear a far higher bar than one that does it on two hundred.
 
 The question this exists for: does moving the stop to breakeven before 1R help
 or hurt? `trail_to_be_at_r: None` is in the default axis as the control, and a
@@ -23,6 +28,7 @@ sweep without a control answers nothing.
 """
 import copy
 import json
+import math
 
 from simulate import find_setups, simulate
 from strategy import merged, validate
@@ -118,6 +124,33 @@ def _spearman(a, b):
     return round(cov / (var_a * var_b) ** 0.5, 3)
 
 
+def _noise_floor(row, configurations):
+    """
+    What the best of N configurations scores when none of them has an edge.
+
+    Averaging R over `n` trades carries a standard error of sd/sqrt(n), and the
+    largest of `N` such averages drawn from a zero-mean distribution sits
+    around sd/sqrt(n) * sqrt(2 ln N). Reporting a winner below that is
+    reporting the search, not the strategy.
+
+    None when the spread cannot be measured, and the caller then makes no claim
+    either way rather than treating an unmeasured floor as a passed test.
+
+    **This is conservative, and knowingly so.** `sqrt(2 ln N)` assumes N
+    independent tests, but a management sweep runs the same setups through
+    different exits, so the configurations are heavily correlated and the
+    effective N is well below the nominal one. The floor therefore sits above
+    the true one and can reject a modest real edge. For a system that decides
+    whether to risk money that is the right direction to be wrong in, and the
+    number is reported so the margin can be judged rather than trusted.
+    """
+    trades, spread = row.get('trades') or 0, row.get('r_stdev')
+    if not spread or trades < 2 or configurations < 2:
+        return None
+    standard_error = spread / math.sqrt(trades)
+    return round(standard_error * math.sqrt(2 * math.log(configurations)), 4)
+
+
 def _median(values):
     rows = sorted(values)
     if not rows:
@@ -152,6 +185,7 @@ def _run(bars, symbol, config, balance, setups=None):
     return {
         'trades': summary.get('closed', 0),
         'avg_r': summary.get('avg_r'),
+        'r_stdev': summary.get('r_stdev'),
         'win_rate_pct': summary.get('win_rate_pct'),
         'expectancy': summary.get('expectancy'),
         'net': summary.get('net'),
@@ -236,17 +270,26 @@ def _verdict(ranked, total, min_trades):
     best = ranked[0]
     median_out = _median(out_rs)
 
-    # An edge is only claimed when the winner actually makes money out of
-    # sample, the ordering survives the split, and the winner is meaningfully
-    # clear of the middle of the pack. All three, in that order.
+    # An edge is only claimed when the winner beats what the best of N would
+    # have scored on data with no edge at all, makes money out of sample, the
+    # ordering survives the split, and it is clear of the middle of the pack.
     margin = (best['out_of_sample']['avg_r'] - median_out) if median_out is not None else None
     profitable = best['out_of_sample']['avg_r'] > 0
-    trustworthy = (profitable and correlation is not None and correlation >= 0.3
+    floor = _noise_floor(best['out_of_sample'], len(ranked))
+    beats_noise = floor is None or best['out_of_sample']['avg_r'] > floor
+    trustworthy = (profitable and beats_noise
+                   and correlation is not None and correlation >= 0.3
                    and margin is not None and margin >= 0.1)
 
     if correlation is None:
         reading = ('Too few ranked configurations to correlate the two halves — '
                    'the ordering below is not evidence of anything.')
+    elif profitable and not beats_noise:
+        reading = (f'The best configuration scores {best["out_of_sample"]["avg_r"]:+.2f} R, '
+                   f'but picking the best of {len(ranked)} would score about '
+                   f'{floor:+.2f} R on data with no edge in it at all. This result '
+                   f'is inside that range — it is what searching thirty '
+                   f'configurations looks like, not what an edge looks like.')
     elif not profitable:
         # The trap this check exists for. Management parameters shift the R
         # distribution in a consistent, mechanical way, so the ranking holds
@@ -289,6 +332,12 @@ def _verdict(ranked, total, min_trades):
         'median_out_of_sample_avg_r': round(median_out, 3) if median_out is not None else None,
         'margin_over_median': round(margin, 3) if margin is not None else None,
         'profitable_out_of_sample': profitable,
+        # What the best of N scores on data with no edge. Measured from the
+        # spread of the winner's own trades rather than assumed, and it is the
+        # check the earlier version was missing: two random-walk seeds in five
+        # produced a "trustworthy" verdict without it.
+        'noise_floor_avg_r': round(floor, 3) if floor is not None else None,
+        'beats_noise': beats_noise,
         'trustworthy': trustworthy,
         'reading': reading,
         'caveat': (f'{total} configurations were tested. The best of {total} looks '

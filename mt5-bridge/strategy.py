@@ -23,10 +23,16 @@ import copy
 # symbol rather than inferred.
 #
 #   contract_size  price-unit value of one lot, in account currency
-#   pip            smallest quoted increment, used for buffers
+#   pip            what one "pip" means in price for this instrument
+#
+# Gold's pip is 0.10, not 0.01. An earlier version had 0.01 here, which made
+# every pip-denominated setting wrong by a factor of ten while looking
+# perfectly reasonable — a 7-pip stop buffer resolved to 0.07 rather than 0.70.
+# Nothing in the newer config is denominated in pips for exactly that reason;
+# buffers are expressed in price and this value is only used for display.
 SYMBOL_SPECS = {
-    'GOLD.i#':  {'pip': 0.01, 'contract_size': 100.0, 'min_lot': 0.01, 'lot_step': 0.01},
-    'BTCUSD#':  {'pip': 0.01, 'contract_size': 1.0, 'min_lot': 0.01, 'lot_step': 0.01},
+    'GOLD.i#':  {'pip': 0.10, 'contract_size': 100.0, 'min_lot': 0.01, 'lot_step': 0.01},
+    'BTCUSD#':  {'pip': 1.00, 'contract_size': 1.0, 'min_lot': 0.01, 'lot_step': 0.01},
     'OILCash#': {'pip': 0.01, 'contract_size': 100.0, 'min_lot': 0.01, 'lot_step': 0.01},
 }
 

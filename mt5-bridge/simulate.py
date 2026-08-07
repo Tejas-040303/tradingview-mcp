@@ -362,6 +362,10 @@ def summarize(trades, skipped, starting_balance, ending_balance, cfg):
         'expectancy': round(sum(t['net'] for t in closed) / len(closed), 2)
                       if closed else None,
         'avg_r': round(sum(rs) / len(rs), 2) if rs else None,
+        # Spread of the R outcomes, so a caller can tell an average of +0.2
+        # from twenty trades apart from the same average from two hundred.
+        # The parameter sweep needs it to know what its own noise floor is.
+        'r_stdev': round(_stdev(rs), 3) if len(rs) > 1 else None,
         # Undefined without a losing trade — reported as null rather than as a
         # spectacular infinity.
         'profit_factor': round(gross_win / gross_loss, 2) if gross_loss else None,
@@ -381,6 +385,16 @@ def summarize(trades, skipped, starting_balance, ending_balance, cfg):
                    'partial_pct': cfg['manage']['partial_pct'],
                    'target_r': cfg['target']['r']},
     }
+
+
+def _stdev(values):
+    """Sample standard deviation. Stdlib statistics would do, but this module
+    stays dependency-free like the rest of the pure layer."""
+    n = len(values)
+    if n < 2:
+        return 0.0
+    mean = sum(values) / n
+    return (sum((v - mean) ** 2 for v in values) / (n - 1)) ** 0.5
 
 
 def _count(values):
