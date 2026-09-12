@@ -411,6 +411,21 @@ Restart Claude Code after editing the config, keep `bridge.py` running, then ask
 it to run `mt5_health`. Symbol encoding is handled for you — pass `GOLD.i#`, not
 `GOLD.i%23`.
 
+The TradingView server's `capture_trade` reads this bridge too — it needs a
+trade to draw — and files the resulting image with the journal service, which
+has its own three:
+
+```
+MT5_JOURNAL_URL     default http://127.0.0.1:8766
+MT5_JOURNAL_TOKEN   must match MT5_JOURNAL_TOKEN on journal_service.py
+MT5_JOURNAL_TIMEOUT default 10000 ms
+TV_SYMBOL_MAP       path to your broker→TradingView symbol mappings,
+                    default symbol-map.json at the repo root
+```
+
+A journal that is not running costs the index entry, not the capture: the image
+is on disk either way.
+
 ## Not here yet
 
 - Any execution path

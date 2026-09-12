@@ -14,3 +14,6 @@ export * as batch from './batch.js';
 export * as watchlist from './watchlist.js';
 export * as indicators from './indicators.js';
 export * as ui from './ui.js';
+export * as symbolmap from './symbolmap.js';
+export * as tradecapture from './tradecapture.js';
+export * as journal from './journal.js';

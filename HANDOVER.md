@@ -124,6 +124,59 @@ A fourth, related: the inconsistency finding was gated behind the survival
 sample. It is a fact about the stops, needs no winners, and was being hidden
 exactly when there were too few winners to say anything else.
 
+### The capture that contained the answer
+
+Trade chart capture had one stated hazard: a screenshot taken after the trade
+closed shows the bars that came *after* the entry, which makes it worthless for
+reviewing the entry decision. Clamp the visible range to the entry bar and the
+problem is solved.
+
+It was not. Three more openings were found while building it, and the last two
+are invisible until you go looking:
+
+**The timeframe.** Choosing a resolution from the trade's duration is the
+obviously right thing for a review — it keeps the trade at a readable size. On
+an entry frame it tells the reader how long the trade lasted before they have
+looked at a single candle. Duration is an outcome.
+
+**A stop read back from the exit fill.** `stopsize.py` makes a genuinely useful
+observation: a trade closed at stop loss exits *at* its stop, recovering a level
+MetaTrader never stored. Using it here fails for the same reason it works — it
+only produces a level for trades that were stopped out, so an entry frame
+carrying a stop rectangle is an entry frame announcing that the trade lost. The
+inference is sound; it is the *presence* of the drawing that leaks.
+
+**The label.** Exit price, exit reason and net P&L were being written into the
+annotation from the same trade record, below a frame carefully clipped to
+contain none of them.
+
+**What it left behind:** `planCapture()` is pure and returns the whole frame —
+range, shapes, levels, label text — as a value, because "the screenshot looked
+right" is not something a test can assert. All four leaks are pinned in
+`tests/tradecapture.test.js`, each verified by reintroducing the bug and
+watching the test fail. An entry capture draws a stop **only** from a level
+supplied independently of the outcome, and says in its notes when it has none.
+
+The general shape: *the presence or absence of a drawing is data too.* A rule
+that only fires for one class of outcome discloses the outcome by firing.
+
+### A guess that cannot be detected downstream
+
+Broker and TradingView symbol names do not correspond — XM's spot gold is
+`GOLD.i#`, which TradingView has never heard of. The tempting fix is a
+heuristic: strip the decorations, and if the root looks like a ticker, use it.
+
+That fails silently in the worst possible way. A wrong mapping does not throw —
+it produces a perfectly plausible chart of a *different instrument*, filed
+against a real position id, and nothing downstream can tell. It is the same
+failure class as an invented number, so it gets the same rule.
+
+`symbolmap.js` is therefore two steps, and only the second can produce a
+symbol: strip decorations to a root (a guess about *formatting*, reported back
+so a human can see what was stripped), then look the root up in a table. An
+unrecognised root is an error naming the file to add it to. No heuristic ever
+promotes itself into a mapping.
+
 ### The broker clock
 
 MT5 reports every timestamp on the **server clock**, not UTC. On XM that is
@@ -235,8 +288,11 @@ history. That is a backtest question, not a dashboard conclusion.
 ## Layout
 
 ```
-src/                    Node MCP servers — 84 TradingView tools, 13 MT5 tools
+src/                    Node MCP servers — 85 TradingView tools, 19 MT5 tools
   core/                 Transport and client logic
+    symbolmap.js        Pure: broker symbol → TradingView symbol, table only
+    tradecapture.js     planCapture() is pure; captureTrade() drives the chart
+    journal.js          HTTP client for the journal service (8766), POST-capable
   tools/                MCP tool definitions
 mt5-bridge/             Python, stdlib only
   bridge.py             Read-only HTTP, 127.0.0.1, GET-only
@@ -271,7 +327,8 @@ scripts/start.js        One-command launcher
 is testable without a terminal. Every `mt5-bridge/*.py` module except
 `mt5_client.py` imports nothing platform-specific and runs on Linux in CI.
 
-**Test counts:** 710 Python, 22 Node MT5, plus the wider Node suite. CI runs
+**Test counts:** 710 Python, 22 Node MT5, 34 Node trade-capture, plus the wider
+Node suite — 241 in `npm run test:unit` altogether. CI runs
 lint, both suites, and a dashboard build that verifies the bundle is actually
 servable — a wrong `base` path builds cleanly and produces a blank page.
 
@@ -312,6 +369,12 @@ servable — a wrong `base` path builds cleanly and produces a blank page.
   `netstat -ano | findstr :8765`.
 - **Excursion analysis needs M1 history downloaded** in the terminal for the
   period, or it returns thin results.
+- **An entry capture's job is to withhold.** Before adding anything to
+  `planCapture()`, ask whether the new thing exists only for one class of
+  outcome — if it does, drawing it on an entry frame discloses the outcome by
+  being there. `kind: 'review'` is where the answer belongs.
+- **`capture_trade` removes its markup by entity id**, not with `draw_clear`.
+  Clearing the chart would take the user's own drawings with it.
 
 ---
 
@@ -324,3 +387,13 @@ servable — a wrong `base` path builds cleanly and produces a blank page.
   has not been verified against a live account.
 - **The insight rules have never run against the real account** — only synthetic
   data. They are rendered as confident cards. Verify before trusting.
+- **Is 5 minutes the right `ENTRY_TIMEFRAME`?** Like `MIN_CLAIM`, a judgement
+  rather than a derivation. It has to be fixed rather than derived from the
+  trade — that part is settled — but nothing says the fixed value should be the
+  same for a scalper and a swing trader. A per-symbol or per-strategy default
+  would be the honest version.
+- **Does an entry capture end at the entry bar or one before it?** It includes
+  the entry bar by default, which is what the roadmap asked for and what a
+  trader expects to see. That bar finished forming *after* the entry, so its
+  close is the one piece of the frame that was not knowable. `include_entry_bar:
+  false` gives the strict version. Which should be the default is unresolved.

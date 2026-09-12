@@ -6,8 +6,8 @@ Two independent MCP servers:
 
 | Server | Tools | Talks to | Needs |
 |---|---|---|---|
-| `tradingview` | 84 | TradingView Desktop over CDP | port 9222 |
-| `mt5` | 11, read-only | MetaTrader 5 via a local Python bridge | port 8765 |
+| `tradingview` | 85 | TradingView Desktop over CDP | port 9222 |
+| `mt5` | 19, read-only | MetaTrader 5 via a local Python bridge | port 8765 |
 
 They are separate processes on purpose: closing TradingView must not take the broker tools down, and either can be registered alone. Everything stays on localhost.
 
@@ -106,6 +106,7 @@ And, with the optional MT5 bridge running:
 - **Trade history** — closed fills summarised into win rate, net P&L and exit reasons, for journaling
 - **Economic calendar** — scheduled events with importance, forecast, previous, and `actual` once released
 - **News blackout check** — one deterministic answer to "is it safe to act right now"
+- **Trade chart capture** — a real trade marked on the chart and filed against its `position_id`, in an entry frame that stops at the entry bar so the outcome is not in the picture
 
 ## Install with Claude Code
 
@@ -361,7 +362,7 @@ Claude reads [`CLAUDE.md`](CLAUDE.md) automatically when working in this project
 
 The last two are the point of running both servers together — neither system can answer them alone.
 
-## Tool Reference — TradingView (84 MCP tools)
+## Tool Reference — TradingView (85 MCP tools)
 
 ### Chart Reading
 
@@ -449,6 +450,7 @@ Read `line.new()`, `label.new()`, `table.new()`, `box.new()` output from any vis
 | `draw_list` / `draw_remove_one` / `draw_clear` | Manage drawings |
 | `alert_create` / `alert_list` / `alert_delete` | Manage price alerts |
 | `capture_screenshot` | Screenshot (regions: full, chart, strategy_tester) |
+| `capture_trade` | Screenshot a real MT5 trade marked up on the chart, bound to its `position_id` |
 | `batch_run` | Run action across multiple symbols/timeframes |
 | `watchlist_get` / `watchlist_add` | Read/modify watchlist |
 | `layout_list` / `layout_switch` | Manage saved layouts |
@@ -629,6 +631,75 @@ Three things it is careful about:
   losing the fact that one existed. There is no delete route at all: a record
   you can quietly remove after a bad trade is not a record.
 
+### Trade chart capture — the picture the journal cannot take
+
+`capture_trade` (a TradingView tool, since it drives the chart) reads a trade
+from the bridge, marks it on the chart, screenshots it, and tells the journal
+the image exists. Broker symbol in, `OANDA:XAUUSD` out, `position_id` attached.
+
+```bash
+tv capture-trade                                  # the most recent closed trade
+tv capture-trade -p 998877 --stop 1944.75         # a specific one, stop drawn
+tv capture-trade -p 998877 -k review              # the whole trade, exit and all
+```
+
+There are two kinds, and only one of them has rules:
+
+| Kind | Shows |
+|---|---|
+| `entry` (default) | Everything knowable at the entry, and nothing else |
+| `review` | The whole trade, entry through exit — the outcome is the subject |
+
+**A screenshot taken after the trade closed contains the answer.** It is a fine
+record of what happened and worthless for reviewing the entry *decision* —
+worse than worthless, because it feels like review. Four things leak the future
+into an entry frame, and only the first is obvious:
+
+1. **The visible range.** It ends at the entry bar. The planner computes the
+   window, and a test asserts no shape and no edge sits past it.
+2. **Exit markup.** Not drawn at all — not the line, not the P&L, not the exit
+   reason in the label.
+3. **The timeframe.** Deriving it from the trade's *duration* is right for a
+   review, but on an entry frame it tells the reader how long the trade lasted
+   before they have looked at a candle. Duration is an outcome; entry captures
+   use a fixed timeframe unless you name one.
+4. **Levels inferred from the exit fill.** A trade closed at stop loss exits
+   *at* its stop, which recovers a level MT5 never stored — sound, and still
+   inadmissible here. It only yields a level for trades that were stopped out,
+   so the mere presence of a stop rectangle would announce the outcome. An
+   entry capture draws a stop only from one you supply (`--stop`, from the
+   plan, the journal or order history) and says so in its notes when it has
+   none.
+
+Each of those four is pinned by a test that was verified by reintroducing the
+bug and watching it fail.
+
+Two smaller things. There is no long/short position widget in `draw_shape`, so
+risk and reward are rectangles from entry to stop and entry to target. And the
+markup is removed again after the shot — by entity id, so anything you drew
+yourself stays.
+
+**Symbols are mapped from a table, never guessed.** XM's `GOLD.i#` is
+`OANDA:XAUUSD`; a wrong mapping does not throw, it produces a plausible chart of
+a *different instrument* filed against your position, and nothing downstream
+could tell. Broker decorations are stripped to a root (`GOLD.i#` → `GOLD`,
+`EURUSDm` → `EURUSD`) and the root is looked up. An unrecognised one is an error
+naming what to add — put your own in `symbol-map.json` at the repo root, or
+point `TV_SYMBOL_MAP` at a file:
+
+```json
+{ "GOLD.i#": "OANDA:XAUUSD", "US30.cash": "TVC:DJI" }
+```
+
+**TradingView prices are not your broker's**, so every capture is labelled with
+that. Read the picture for structure — where the entry sat relative to the swing
+— not to check a fill.
+
+Captures are a **cache, not an archive**: a pure function of trade data plus
+chart settings, so deleting one loses nothing that re-running this cannot
+rebuild. Retention lives in the journal's `POST /prune`, which deletes files and
+keeps the rows.
+
 ### Execution — the only process that can move money
 
 Three processes, three capabilities. `bridge.py` reads and cannot write. The
@@ -707,12 +778,12 @@ The key flag: `--remote-debugging-port=9222`
 ## Testing
 
 ```bash
-npm run test:unit                       # 190 Node tests, no TradingView needed
-python -m unittest discover mt5-bridge  # 111 Python tests, no terminal needed
+npm run test:unit                       # 241 Node tests, no TradingView needed
+python -m unittest discover mt5-bridge  # 710 Python tests, no terminal needed
 npm test                                # adds e2e — needs TradingView on port 9222
 ```
 
-`test:unit` covers Pine Script static analysis, server-side compilation, CLI routing, chart-readiness detection, and the MT5 bridge client. The Python suite covers the bridge's pure logic — timeframe resolution, bar and deal summaries, calendar filtering, news blackout windows, broker-clock conversion — plus every route against a faked MetaTrader 5 module.
+`test:unit` covers Pine Script static analysis, server-side compilation, CLI routing, chart-readiness detection, the MT5 bridge client, and the trade-capture planner — including the four ways the future can leak into an entry capture, each of which was verified by reintroducing the bug and watching the test fail. The Python suite covers the bridge's pure logic — timeframe resolution, bar and deal summaries, calendar filtering, news blackout windows, broker-clock conversion — plus every route against a faked MetaTrader 5 module.
 
 Both run in CI on Node 20 and 22. Neither needs TradingView, a broker terminal, or a network.
 
@@ -726,7 +797,7 @@ Claude Code ─┬─ MCP "tradingview" (stdio) ─→ CDP :9222 ─→ TradingV
                                           calendar_export.mq5 ┘ (writes MQL5/Files/*.json)
 ```
 
-- **Transport**: MCP over stdio — 84 TradingView tools + 13 MT5 tools — plus a `tv` CLI (30 commands, 66 subcommands)
+- **Transport**: MCP over stdio — 85 TradingView tools + 19 MT5 tools — plus a `tv` CLI (30 commands, 66 subcommands)
 - **Connections**: Chrome DevTools Protocol on localhost:9222; read-only HTTP bridge on localhost:8765
 - **Streaming**: Poll-and-diff loop with deduplication, JSONL output to stdout
 - **Dashboard**: React app built to static assets the bridge serves, same-origin with its API. The Python side stays stdlib-only

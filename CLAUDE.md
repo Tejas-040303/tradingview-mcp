@@ -1,6 +1,6 @@
 # TradingView MCP — Claude Instructions
 
-84 tools for reading and controlling a live TradingView Desktop chart via CDP (port 9222).
+85 tools for reading and controlling a live TradingView Desktop chart via CDP (port 9222).
 
 ## Decision Tree — Which Tool When
 
@@ -67,6 +67,18 @@ Use `study_filter` parameter to target a specific indicator by name substring (e
 - `draw_list` → see what's drawn
 - `draw_remove_one` → remove by ID
 - `draw_clear` → remove all
+
+### "Show me that trade" / "capture my trade for review"
+`capture_trade` — reads the trade from the MT5 bridge, marks it on the chart, screenshots it, files it against `position_id`. Needs the bridge (8765); files with the journal (8766) if it is up.
+
+- `capture_trade` with no args → the most recently closed trade, as an **entry** capture
+- `position_id` → a specific trade (get ids from `mt5_trades`)
+- `kind: "entry"` (default) → the frame stops at the entry bar. No exit, no P&L, no outcome-derived level. **This is the one to use for reviewing a decision**
+- `kind: "review"` → the whole trade including the exit. Use when the question is about the outcome
+- `stop` / `target` → prices known at entry. An entry capture draws a stop **only** from these: one read back from the exit fill would exist only for losing trades, so its presence would give the outcome away
+- `symbol` → a TradingView symbol, if the broker symbol is not in the mapping table
+
+Do not work around an unmapped symbol by guessing a TradingView ticker into `symbol`. The error names the file to add it to — a wrong mapping produces a plausible chart of the wrong instrument filed against a real position.
 
 ### "Manage alerts"
 - `alert_create` → set price alert (condition: "crossing", "greater_than", "less_than")
@@ -190,6 +202,10 @@ Useful combinations: read levels from the chart with `data_get_pine_lines`, then
 check where fills actually landed with `mt5_deals`; or mark real entries on the
 chart by feeding `mt5_deals` prices into `draw_shape`.
 
+`capture_trade` does that second one properly — it maps the symbol through a
+table rather than guessing, and it will not put post-entry information into an
+entry frame. Prefer it over hand-drawing a trade.
+
 ### Timestamps — read before joining anything
 MetaTrader 5 reports times against the **broker clock**, not UTC. Every MT5
 timestamp is labelled twice: `time_server` / `time_server_iso` (no `Z`, because
@@ -242,6 +258,7 @@ These tools can return large payloads. Follow these rules to avoid context bloat
 | `data_get_ohlcv` (summary) | ~500 bytes |
 | `data_get_ohlcv` (100 bars) | ~8 KB |
 | `capture_screenshot` | ~300 bytes (returns file path, not image data) |
+| `capture_trade` | ~1 KB (file path, levels, range, and the notes explaining what is and is not in the frame) |
 
 ## Tool Conventions
 

@@ -25,3 +25,7 @@ mt5-bridge/journal/
 
 # Order audit log — a record of real trading activity.
 mt5-bridge/execution/
+
+# Your own broker→TradingView symbol mappings. Broker naming is per-broker, so
+# this is personal configuration rather than something to share.
+symbol-map.json
