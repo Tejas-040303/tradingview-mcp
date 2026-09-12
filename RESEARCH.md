@@ -54,7 +54,7 @@ The most impactful design decision was making all tools return compact output by
 
 ### Tool Count Does Not Confuse the Agent
 
-84 tools seems excessive, but with clear MCP server instructions and a `CLAUDE.md` decision tree, Claude consistently selects the right tools. The key is descriptive tool names and the instruction block — not reducing tool count.
+85 tools seems excessive, but with clear MCP server instructions and a `CLAUDE.md` decision tree, Claude consistently selects the right tools. The key is descriptive tool names and the instruction block — not reducing tool count.
 
 ### Pine Script Development is the Strongest Use Case
 

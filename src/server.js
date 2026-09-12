@@ -22,7 +22,7 @@ const server = new McpServer(
     description: 'AI-assisted TradingView chart analysis and Pine Script development via Chrome DevTools Protocol',
   },
   {
-    instructions: `TradingView MCP — 84 tools for reading and controlling a live TradingView Desktop chart.
+    instructions: `TradingView MCP — 85 tools for reading and controlling a live TradingView Desktop chart.
 
 TOOL SELECTION GUIDE — use this to pick the right tool:
 
@@ -52,6 +52,10 @@ Pine Script development:
 - WARNING: pine_get_source can return 200KB+ for complex scripts — avoid unless editing
 
 Screenshots: capture_screenshot → regions: "full", "chart", "strategy_tester"
+Trade captures: capture_trade → screenshot a real MT5 trade marked up, bound to its position_id
+- kind="entry" (default) stops the frame at the entry bar and draws no exit, P&L or outcome-derived level, so it can be used to review the decision
+- kind="review" shows the whole trade including the exit
+- pass stop=/target= for levels known at entry — an entry capture draws no stop otherwise, on purpose
 Replay: replay_start → replay_step → replay_trade → replay_status → replay_stop
 Batch: batch_run → run action across multiple symbols/timeframes
 Drawing: draw_shape → horizontal_line, trend_line, rectangle, text
